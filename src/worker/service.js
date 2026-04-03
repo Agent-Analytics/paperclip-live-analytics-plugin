@@ -1,0 +1,535 @@
+import {
+  ACTION_KEYS,
+  DATA_KEYS,
+  DEFAULT_BASE_URL,
+  DEFAULT_SNOOZE_MINUTES,
+  MAX_ENABLED_ASSET_STREAMS,
+} from '../shared/constants.js';
+import {
+  buildCompanyLiveState,
+  clampLiveWindowSeconds,
+  clampPollIntervalSeconds,
+  createEmptyAssetState,
+  createSnoozeExpiry,
+  deriveWidgetSummary,
+  mappingSignature,
+  normalizeAssetMapping,
+  applySnapshotToAssetState,
+  applyTrackEventToAssetState,
+  validateEnabledMappings,
+} from '../shared/live-state.js';
+import { AgentAnalyticsClient } from '../shared/agent-analytics-client.js';
+import { closeLiveChannel, emitLiveState, openLiveChannel, registerActionHandler, registerDataHandler } from './paperclip.js';
+import { loadAuthState, loadSettings, loadSnoozes, saveAuthState, saveSettings, saveSnoozes } from './state.js';
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function serializeAccount(account) {
+  if (!account) return null;
+  return {
+    id: account.id,
+    email: account.email,
+    githubLogin: account.github_login || null,
+    googleName: account.google_name || null,
+  };
+}
+
+function toPublicAuthState(auth) {
+  return {
+    status: auth.status,
+    mode: auth.mode,
+    tier: auth.tier,
+    accountSummary: auth.accountSummary,
+    accessExpiresAt: auth.accessExpiresAt,
+    refreshExpiresAt: auth.refreshExpiresAt,
+    pendingAuthRequest: auth.pendingAuthRequest,
+    lastValidatedAt: auth.lastValidatedAt,
+    lastError: auth.lastError,
+    connected: Boolean(auth.accessToken),
+  };
+}
+
+export class PaperclipLiveAnalyticsService {
+  constructor(ctx, { fetchImpl = globalThis.fetch } = {}) {
+    this.ctx = ctx;
+    this.fetchImpl = fetchImpl;
+    this.runtimes = new Map();
+  }
+
+  async register() {
+    await registerDataHandler(this.ctx, DATA_KEYS.livePageLoad, (input) => this.loadLivePage(input));
+    await registerDataHandler(this.ctx, DATA_KEYS.liveWidgetLoad, (input) => this.loadLiveWidget(input));
+    await registerDataHandler(this.ctx, DATA_KEYS.settingsLoad, (input) => this.loadSettingsData(input));
+
+    await registerActionHandler(this.ctx, ACTION_KEYS.authStart, (input) => this.startAuth(input));
+    await registerActionHandler(this.ctx, ACTION_KEYS.authComplete, (input) => this.completeAuth(input));
+    await registerActionHandler(this.ctx, ACTION_KEYS.authReconnect, (input) => this.reconnectAuth(input));
+    await registerActionHandler(this.ctx, ACTION_KEYS.authDisconnect, (input) => this.disconnectAuth(input));
+    await registerActionHandler(this.ctx, ACTION_KEYS.settingsSave, (input) => this.savePluginSettings(input));
+    await registerActionHandler(this.ctx, ACTION_KEYS.mappingUpsert, (input) => this.upsertMapping(input));
+    await registerActionHandler(this.ctx, ACTION_KEYS.mappingRemove, (input) => this.removeMapping(input));
+    await registerActionHandler(this.ctx, ACTION_KEYS.assetSnooze, (input) => this.snoozeAsset(input));
+    await registerActionHandler(this.ctx, ACTION_KEYS.assetUnsnooze, (input) => this.unsnoozeAsset(input));
+  }
+
+  async shutdown() {
+    for (const [companyId] of this.runtimes.entries()) {
+      await this.stopRuntime(companyId);
+    }
+  }
+
+  async loadLivePage({ companyId }) {
+    const liveState = await this.ensureLiveState(companyId);
+    return liveState;
+  }
+
+  async loadLiveWidget({ companyId }) {
+    const liveState = await this.ensureLiveState(companyId);
+    return deriveWidgetSummary(liveState);
+  }
+
+  async loadSettingsData({ companyId }) {
+    const settings = await loadSettings(this.ctx, companyId);
+    const auth = await loadAuthState(this.ctx, companyId);
+    const validation = validateEnabledMappings(settings.monitoredAssets);
+    const projects = await this.listProjectsForCompany(companyId).catch((error) => ({
+      projects: [],
+      tier: auth.tier,
+      error: error.message,
+    }));
+    return {
+      settings,
+      auth: toPublicAuthState(auth),
+      discoveredProjects: projects.projects || [],
+      validation,
+      projectListError: projects.error || null,
+    };
+  }
+
+  async startAuth({ companyId, label }) {
+    const settings = await loadSettings(this.ctx, companyId);
+    const auth = await loadAuthState(this.ctx, companyId);
+    const client = this.createClient(companyId, settings, auth);
+    const started = await client.startPaperclipAuth({ companyId, label });
+
+    const nextAuth = {
+      ...auth,
+      status: 'pending',
+      lastError: null,
+      pendingAuthRequest: {
+        authRequestId: started.auth_request_id,
+        authorizeUrl: started.authorize_url,
+        approvalCode: started.approval_code,
+        pollToken: started.poll_token,
+        expiresAt: started.expires_at,
+      },
+    };
+    await saveAuthState(this.ctx, companyId, nextAuth);
+    return {
+      auth: toPublicAuthState(nextAuth),
+    };
+  }
+
+  async completeAuth({ companyId, authRequestId, exchangeCode }) {
+    const settings = await loadSettings(this.ctx, companyId);
+    const auth = await loadAuthState(this.ctx, companyId);
+    const requestId = authRequestId || auth.pendingAuthRequest?.authRequestId;
+    if (!requestId || !exchangeCode) {
+      throw new Error('authRequestId and exchangeCode are required');
+    }
+
+    const client = this.createClient(companyId, settings, auth);
+    const exchanged = await client.exchangeAgentSession(requestId, exchangeCode);
+    const nextAuth = {
+      mode: 'agent_session',
+      accessToken: exchanged.agent_session.access_token,
+      refreshToken: exchanged.agent_session.refresh_token,
+      accessExpiresAt: exchanged.agent_session.access_expires_at,
+      refreshExpiresAt: exchanged.agent_session.refresh_expires_at,
+      accountSummary: serializeAccount(exchanged.account),
+      tier: exchanged.account?.tier || null,
+      status: 'connected',
+      pendingAuthRequest: null,
+      lastValidatedAt: Date.now(),
+      lastError: null,
+    };
+
+    await saveAuthState(this.ctx, companyId, nextAuth);
+    await this.ensureLiveState(companyId, { forceSync: true });
+    return this.loadSettingsData({ companyId });
+  }
+
+  async reconnectAuth({ companyId }) {
+    const settings = await loadSettings(this.ctx, companyId);
+    const auth = await loadAuthState(this.ctx, companyId);
+    if (!auth.refreshToken) {
+      return this.startAuth({ companyId });
+    }
+
+    const client = this.createClient(companyId, settings, auth);
+    const refreshed = await client.refreshAgentSession();
+    const nextAuth = {
+      ...auth,
+      accessToken: refreshed.access_token,
+      refreshToken: refreshed.refresh_token || auth.refreshToken,
+      accessExpiresAt: refreshed.access_expires_at,
+      refreshExpiresAt: refreshed.refresh_expires_at || auth.refreshExpiresAt,
+      status: 'connected',
+      lastValidatedAt: Date.now(),
+      lastError: null,
+    };
+    await saveAuthState(this.ctx, companyId, nextAuth);
+    await this.ensureLiveState(companyId, { forceSync: true });
+    return this.loadSettingsData({ companyId });
+  }
+
+  async disconnectAuth({ companyId }) {
+    const auth = await loadAuthState(this.ctx, companyId);
+    const nextAuth = {
+      ...auth,
+      accessToken: null,
+      refreshToken: null,
+      accessExpiresAt: null,
+      refreshExpiresAt: null,
+      status: 'disconnected',
+      pendingAuthRequest: null,
+      lastError: null,
+    };
+    await saveAuthState(this.ctx, companyId, nextAuth);
+    await this.stopRuntime(companyId);
+    return this.loadSettingsData({ companyId });
+  }
+
+  async savePluginSettings({ companyId, settings: partialSettings = {} }) {
+    const currentSettings = await loadSettings(this.ctx, companyId);
+    const nextSettings = {
+      ...currentSettings,
+      agentAnalyticsBaseUrl: partialSettings.agentAnalyticsBaseUrl || currentSettings.agentAnalyticsBaseUrl || DEFAULT_BASE_URL,
+      liveWindowSeconds: clampLiveWindowSeconds(partialSettings.liveWindowSeconds ?? currentSettings.liveWindowSeconds),
+      pollIntervalSeconds: clampPollIntervalSeconds(partialSettings.pollIntervalSeconds ?? currentSettings.pollIntervalSeconds),
+      pluginEnabled: partialSettings.pluginEnabled ?? currentSettings.pluginEnabled,
+    };
+    const validation = validateEnabledMappings(nextSettings.monitoredAssets);
+    if (validation.errors.length > 0) {
+      throw new Error(validation.errors.join(' '));
+    }
+    await saveSettings(this.ctx, companyId, nextSettings);
+    await this.ensureLiveState(companyId, { forceSync: true });
+    return this.loadSettingsData({ companyId });
+  }
+
+  async upsertMapping({ companyId, mapping }) {
+    const settings = await loadSettings(this.ctx, companyId);
+    const normalized = normalizeAssetMapping(mapping);
+    const monitoredAssets = [...settings.monitoredAssets];
+    const existingIndex = monitoredAssets.findIndex((entry) => entry.assetKey === normalized.assetKey);
+
+    if (existingIndex === -1) monitoredAssets.push(normalized);
+    else monitoredAssets.splice(existingIndex, 1, normalized);
+
+    const validation = validateEnabledMappings(monitoredAssets);
+    if (validation.errors.length > 0) {
+      throw new Error(validation.errors.join(' '));
+    }
+
+    const nextSettings = {
+      ...settings,
+      monitoredAssets,
+    };
+    await saveSettings(this.ctx, companyId, nextSettings);
+    await this.ensureLiveState(companyId, { forceSync: true });
+    return this.loadSettingsData({ companyId });
+  }
+
+  async removeMapping({ companyId, assetKey }) {
+    const settings = await loadSettings(this.ctx, companyId);
+    const nextSettings = {
+      ...settings,
+      monitoredAssets: settings.monitoredAssets.filter((mapping) => mapping.assetKey !== assetKey),
+    };
+    await saveSettings(this.ctx, companyId, nextSettings);
+    await this.ensureLiveState(companyId, { forceSync: true });
+    return this.loadSettingsData({ companyId });
+  }
+
+  async snoozeAsset({ companyId, assetKey, minutes = DEFAULT_SNOOZE_MINUTES }) {
+    const snoozes = await loadSnoozes(this.ctx, companyId);
+    const nextSnoozes = {
+      ...snoozes,
+      [assetKey]: createSnoozeExpiry(minutes),
+    };
+    await saveSnoozes(this.ctx, companyId, nextSnoozes);
+    const liveState = await this.ensureLiveState(companyId);
+    return {
+      snoozes: nextSnoozes,
+      liveState,
+    };
+  }
+
+  async unsnoozeAsset({ companyId, assetKey }) {
+    const snoozes = await loadSnoozes(this.ctx, companyId);
+    const nextSnoozes = { ...snoozes };
+    delete nextSnoozes[assetKey];
+    await saveSnoozes(this.ctx, companyId, nextSnoozes);
+    const liveState = await this.ensureLiveState(companyId);
+    return {
+      snoozes: nextSnoozes,
+      liveState,
+    };
+  }
+
+  async ensureLiveState(companyId, { forceSync = false } = {}) {
+    const settings = await loadSettings(this.ctx, companyId);
+    const auth = await loadAuthState(this.ctx, companyId);
+    const snoozes = await loadSnoozes(this.ctx, companyId);
+
+    const runtime = this.getRuntime(companyId);
+    if (forceSync) {
+      await this.syncRuntime(companyId, settings, auth, runtime);
+    } else if (!runtime.lastState) {
+      await this.syncRuntime(companyId, settings, auth, runtime);
+    }
+
+    const assetStates = settings.monitoredAssets.map((mapping) => {
+      const normalized = normalizeAssetMapping(mapping);
+      return runtime.assetStates.get(normalized.assetKey) || createEmptyAssetState(normalized);
+    });
+
+    const liveState = buildCompanyLiveState({
+      settings,
+      auth,
+      assets: assetStates,
+      snoozes,
+    });
+    runtime.lastState = liveState;
+    return liveState;
+  }
+
+  async syncRuntime(companyId, settings, auth, runtime) {
+    const mappings = settings.monitoredAssets.map(normalizeAssetMapping);
+    const validation = validateEnabledMappings(mappings);
+    if (!settings.pluginEnabled || !auth.accessToken || validation.errors.length > 0) {
+      auth.status = validation.errors.length > 0 ? 'error' : auth.status;
+      if (validation.errors.length > 0) auth.lastError = validation.errors.join(' ');
+      await saveAuthState(this.ctx, companyId, auth);
+      await this.stopRuntime(companyId, { keepState: true });
+      return;
+    }
+
+    await openLiveChannel(this.ctx, companyId);
+
+    for (const mapping of mappings) {
+      const current = runtime.assetStates.get(mapping.assetKey) || createEmptyAssetState(mapping);
+      runtime.assetStates.set(mapping.assetKey, {
+        ...current,
+        ...mapping,
+      });
+    }
+
+    for (const assetKey of Array.from(runtime.assetStates.keys())) {
+      if (!mappings.find((mapping) => mapping.assetKey === assetKey)) {
+        runtime.assetStates.delete(assetKey);
+      }
+    }
+
+    const enabledMappings = mappings.filter((mapping) => mapping.enabled !== false).slice(0, MAX_ENABLED_ASSET_STREAMS);
+    const groupedMappings = new Map();
+    for (const mapping of enabledMappings) {
+      const signature = mappingSignature(mapping);
+      const group = groupedMappings.get(signature) || [];
+      group.push(mapping);
+      groupedMappings.set(signature, group);
+    }
+
+    for (const [signature, streamRuntime] of runtime.streams.entries()) {
+      if (!groupedMappings.has(signature)) {
+        streamRuntime.controller.abort();
+        runtime.streams.delete(signature);
+      }
+    }
+
+    for (const [signature, group] of groupedMappings.entries()) {
+      const existing = runtime.streams.get(signature);
+      if (existing) {
+        existing.mappings = group;
+      } else {
+        runtime.streams.set(signature, this.startStreamLoop(companyId, settings, auth, group));
+      }
+    }
+
+    for (const mapping of enabledMappings) {
+      const poller = runtime.pollers.get(mapping.assetKey);
+      if (poller) {
+        clearInterval(poller);
+      }
+
+      const intervalId = setInterval(() => {
+        this.refreshSnapshot(companyId, mapping).catch((error) => this.recordAssetError(companyId, mapping.assetKey, error));
+      }, settings.pollIntervalSeconds * 1000);
+      runtime.pollers.set(mapping.assetKey, intervalId);
+      await this.refreshSnapshot(companyId, mapping);
+    }
+
+    for (const [assetKey, intervalId] of runtime.pollers.entries()) {
+      if (!enabledMappings.find((mapping) => mapping.assetKey === assetKey)) {
+        clearInterval(intervalId);
+        runtime.pollers.delete(assetKey);
+      }
+    }
+  }
+
+  createClient(companyId, settings, auth) {
+    return new AgentAnalyticsClient({
+      auth: {
+        access_token: auth.accessToken,
+        refresh_token: auth.refreshToken,
+      },
+      baseUrl: settings.agentAnalyticsBaseUrl || DEFAULT_BASE_URL,
+      fetchImpl: this.fetchImpl,
+      onAuthUpdate: async (nextAuth) => {
+        const current = await loadAuthState(this.ctx, companyId);
+        await saveAuthState(this.ctx, companyId, {
+          ...current,
+          accessToken: nextAuth.access_token,
+          refreshToken: nextAuth.refresh_token || current.refreshToken,
+          accessExpiresAt: nextAuth.access_expires_at,
+          refreshExpiresAt: nextAuth.refresh_expires_at || current.refreshExpiresAt,
+          status: 'connected',
+          lastValidatedAt: Date.now(),
+          lastError: null,
+        });
+      },
+    });
+  }
+
+  getRuntime(companyId) {
+    let runtime = this.runtimes.get(companyId);
+    if (!runtime) {
+      runtime = {
+        pollers: new Map(),
+        streams: new Map(),
+        assetStates: new Map(),
+        lastState: null,
+      };
+      this.runtimes.set(companyId, runtime);
+    }
+    return runtime;
+  }
+
+  startStreamLoop(companyId, settings, auth, mappings) {
+    const controller = new AbortController();
+    const runtime = {
+      controller,
+      mappings,
+      run: (async () => {
+        while (!controller.signal.aborted) {
+          try {
+            const currentSettings = await loadSettings(this.ctx, companyId);
+            const currentAuth = await loadAuthState(this.ctx, companyId);
+            const client = this.createClient(companyId, currentSettings, currentAuth);
+            const primaryMapping = mappings[0];
+            await client.subscribeToStream({
+              project: primaryMapping.agentAnalyticsProject,
+              filter: primaryMapping.primaryHostname ? `hostname:${primaryMapping.primaryHostname}` : null,
+              signal: controller.signal,
+              onTrack: async (track) => {
+                await this.applyTrackEvent(companyId, mappings, track);
+              },
+            });
+          } catch (error) {
+            if (!controller.signal.aborted) {
+              for (const mapping of mappings) {
+                await this.recordAssetError(companyId, mapping.assetKey, error);
+              }
+              await delay(2_000);
+            }
+          }
+        }
+      })(),
+    };
+    return runtime;
+  }
+
+  async refreshSnapshot(companyId, mapping) {
+    const settings = await loadSettings(this.ctx, companyId);
+    const auth = await loadAuthState(this.ctx, companyId);
+    const client = this.createClient(companyId, settings, auth);
+    const snapshot = await client.getLive(mapping.agentAnalyticsProject, {
+      window: settings.liveWindowSeconds,
+    });
+    const runtime = this.getRuntime(companyId);
+    const currentState = runtime.assetStates.get(mapping.assetKey) || createEmptyAssetState(mapping);
+    runtime.assetStates.set(mapping.assetKey, applySnapshotToAssetState(currentState, snapshot, mapping));
+    await this.publish(companyId);
+  }
+
+  async applyTrackEvent(companyId, mappings, track) {
+    const runtime = this.getRuntime(companyId);
+    for (const mapping of mappings) {
+      const currentState = runtime.assetStates.get(mapping.assetKey) || createEmptyAssetState(mapping);
+      runtime.assetStates.set(mapping.assetKey, applyTrackEventToAssetState(currentState, track, mapping));
+    }
+    await this.publish(companyId);
+  }
+
+  async recordAssetError(companyId, assetKey, error) {
+    const runtime = this.getRuntime(companyId);
+    const current = runtime.assetStates.get(assetKey);
+    if (!current) return;
+    runtime.assetStates.set(assetKey, {
+      ...current,
+      status: 'error',
+      errors: [error.message || String(error)],
+      lastUpdatedAt: Date.now(),
+    });
+
+    const auth = await loadAuthState(this.ctx, companyId);
+    await saveAuthState(this.ctx, companyId, {
+      ...auth,
+      status: 'error',
+      lastError: error.message || String(error),
+    });
+    await this.publish(companyId);
+  }
+
+  async publish(companyId) {
+    const liveState = await this.ensureLiveState(companyId);
+    await emitLiveState(this.ctx, companyId, liveState);
+  }
+
+  async listProjectsForCompany(companyId) {
+    const settings = await loadSettings(this.ctx, companyId);
+    const auth = await loadAuthState(this.ctx, companyId);
+    if (!auth.accessToken) {
+      return { projects: [], tier: auth.tier, error: null };
+    }
+    const client = this.createClient(companyId, settings, auth);
+    return client.listProjects();
+  }
+
+  async stopRuntime(companyId, { keepState = false } = {}) {
+    const runtime = this.runtimes.get(companyId);
+    if (!runtime) return;
+
+    for (const intervalId of runtime.pollers.values()) {
+      clearInterval(intervalId);
+    }
+    runtime.pollers.clear();
+
+    for (const streamRuntime of runtime.streams.values()) {
+      streamRuntime.controller.abort();
+    }
+    runtime.streams.clear();
+
+    if (!keepState) {
+      runtime.assetStates.clear();
+      runtime.lastState = null;
+      this.runtimes.delete(companyId);
+    }
+
+    await closeLiveChannel(this.ctx, companyId);
+  }
+}
+
