@@ -9,6 +9,10 @@ export function createDefaultSettings() {
     agentAnalyticsBaseUrl: DEFAULT_BASE_URL,
     liveWindowSeconds: DEFAULT_LIVE_WINDOW_SECONDS,
     pollIntervalSeconds: DEFAULT_POLL_INTERVAL_SECONDS,
+    selectedProjectId: '',
+    selectedProjectName: '',
+    selectedProjectLabel: '',
+    selectedProjectAllowedOrigins: [],
     monitoredAssets: [],
     pluginEnabled: true,
   };
@@ -70,4 +74,3 @@ export function createEmptyCompanyLiveState() {
     warnings: [],
   };
 }
-

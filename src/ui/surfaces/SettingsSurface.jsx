@@ -1,47 +1,87 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
-const EMPTY_MAPPING = {
-  assetKey: '',
-  label: '',
-  kind: 'website',
-  paperclipProjectId: '',
-  agentAnalyticsProject: '',
-  primaryHostname: '',
-  enabled: true,
-};
-
-function MappingRow({ mapping, onRemove }) {
-  return (
-    <div className="aa-settings-row">
-      <div>
-        <strong>{mapping.label}</strong>
-        <span>{mapping.kind} · {mapping.agentAnalyticsProject}</span>
-      </div>
-      <button className="aa-button aa-button-ghost" onClick={() => onRemove(mapping.assetKey)}>
-        Remove
-      </button>
-    </div>
-  );
+function normalizeOrigins(value) {
+  if (Array.isArray(value)) return value.filter(Boolean).join(', ');
+  return value || '*';
 }
 
 export function SettingsSurface({
   settingsData,
   onStartAuth,
-  onCompleteAuth,
   onReconnect,
   onDisconnect,
   onSaveSettings,
-  onUpsertMapping,
-  onRemoveMapping,
 }) {
+  const popupRef = useRef(null);
+  const pendingPopupLaunchRef = useRef(false);
   const [formState, setFormState] = useState(() => ({
     agentAnalyticsBaseUrl: settingsData.settings.agentAnalyticsBaseUrl,
     liveWindowSeconds: settingsData.settings.liveWindowSeconds,
     pollIntervalSeconds: settingsData.settings.pollIntervalSeconds,
+    selectedProjectId: settingsData.settings.selectedProjectId || '',
+    selectedProjectName: settingsData.settings.selectedProjectName || '',
+    selectedProjectLabel: settingsData.settings.selectedProjectLabel || '',
+    selectedProjectAllowedOrigins: settingsData.settings.selectedProjectAllowedOrigins || [],
     pluginEnabled: settingsData.settings.pluginEnabled,
   }));
-  const [mappingForm, setMappingForm] = useState(EMPTY_MAPPING);
-  const [exchangeCode, setExchangeCode] = useState('');
+
+  useEffect(() => {
+    setFormState({
+      agentAnalyticsBaseUrl: settingsData.settings.agentAnalyticsBaseUrl,
+      liveWindowSeconds: settingsData.settings.liveWindowSeconds,
+      pollIntervalSeconds: settingsData.settings.pollIntervalSeconds,
+      selectedProjectId: settingsData.settings.selectedProjectId || '',
+      selectedProjectName: settingsData.settings.selectedProjectName || '',
+      selectedProjectLabel: settingsData.settings.selectedProjectLabel || '',
+      selectedProjectAllowedOrigins: settingsData.settings.selectedProjectAllowedOrigins || [],
+      pluginEnabled: settingsData.settings.pluginEnabled,
+    });
+  }, [settingsData.settings]);
+
+  useEffect(() => {
+    const authorizeUrl = settingsData.auth.pendingAuthRequest?.authorizeUrl;
+    if (!authorizeUrl || !pendingPopupLaunchRef.current || typeof window === 'undefined') return;
+
+    const popup = popupRef.current;
+    pendingPopupLaunchRef.current = false;
+
+    if (popup && !popup.closed) {
+      try {
+        popup.location.href = authorizeUrl;
+        popup.focus?.();
+        return;
+      } catch {
+        // Fall through to opening a fresh tab if the host browser blocks direct navigation.
+      }
+    }
+
+    window.open(authorizeUrl, '_blank');
+  }, [settingsData.auth.pendingAuthRequest?.authorizeUrl]);
+
+  async function handleStartLogin() {
+    if (typeof window !== 'undefined') {
+      popupRef.current = window.open('', '_blank');
+      pendingPopupLaunchRef.current = true;
+    }
+
+    try {
+      const result = await onStartAuth();
+      const authorizeUrl = result?.auth?.pendingAuthRequest?.authorizeUrl;
+      if (authorizeUrl && typeof window !== 'undefined') {
+        const popup = popupRef.current;
+        if (popup && !popup.closed) {
+          popup.location.href = authorizeUrl;
+          popup.focus?.();
+          pendingPopupLaunchRef.current = false;
+        }
+      }
+    } catch (error) {
+      pendingPopupLaunchRef.current = false;
+      const popup = popupRef.current;
+      if (popup && !popup.closed) popup.close();
+      throw error;
+    }
+  }
 
   return (
     <div className="aa-settings-shell">
@@ -49,7 +89,7 @@ export function SettingsSurface({
         <div className="aa-panel-header">
           <div>
             <p className="aa-kicker">Connection</p>
-            <h2>Login-first auth, worker-held tokens.</h2>
+            <h2>Browser approval, worker-held session, no pasted finish code.</h2>
           </div>
           <span className={`aa-status-pill aa-status-${settingsData.auth.status}`}>{settingsData.auth.status}</span>
         </div>
@@ -59,45 +99,46 @@ export function SettingsSurface({
             <div className="aa-settings-row">
               <div>
                 <strong>Connected account</strong>
-                <span>{settingsData.auth.accountSummary?.email || 'Not connected'}</span>
+                <span>
+                  {settingsData.auth.connected
+                    ? settingsData.auth.accountSummary?.email || 'Connected'
+                    : settingsData.auth.pendingAuthRequest
+                      ? 'Pending browser approval'
+                      : 'Not connected'}
+                </span>
               </div>
-              {settingsData.auth.connected ? (
+              {settingsData.auth.connected || settingsData.auth.pendingAuthRequest ? (
                 <button className="aa-button aa-button-secondary" onClick={onDisconnect}>Disconnect</button>
               ) : (
-                <button className="aa-button aa-button-primary" onClick={onStartAuth}>Start login</button>
+                <button className="aa-button aa-button-primary" onClick={handleStartLogin}>Connect in browser</button>
               )}
             </div>
 
             {settingsData.auth.pendingAuthRequest ? (
               <div className="aa-auth-box">
-                <label>
-                  Approval URL
-                  <a href={settingsData.auth.pendingAuthRequest.authorizeUrl} target="_blank" rel="noreferrer">
-                    {settingsData.auth.pendingAuthRequest.authorizeUrl}
-                  </a>
-                </label>
-                <label>
-                  Finish code
-                  <input value={exchangeCode} onChange={(event) => setExchangeCode(event.target.value)} placeholder="Paste finish code" />
-                </label>
+                <p>Approve the Agent Analytics login in the browser. The approval tab should return here and close when it finishes.</p>
+                <a href={settingsData.auth.pendingAuthRequest.authorizeUrl} target="_blank" rel="noreferrer">
+                  Open approval page
+                </a>
+                <p className="aa-muted-note">{settingsData.auth.pendingAuthRequest.authorizeUrl}</p>
+                <p className="aa-muted-note">If the browser does not close cleanly, use Check approval once.</p>
                 <div className="aa-inline-actions">
-                  <button className="aa-button aa-button-primary" onClick={() => onCompleteAuth(settingsData.auth.pendingAuthRequest.authRequestId, exchangeCode)}>
-                    Complete login
-                  </button>
-                  <button className="aa-button aa-button-ghost" onClick={onReconnect}>Refresh session</button>
+                  <button className="aa-button aa-button-ghost" onClick={onReconnect}>Check approval</button>
                 </div>
               </div>
             ) : null}
           </div>
 
           <div className="aa-mini-panel">
-            <h3>Discovered projects</h3>
-            {(settingsData.discoveredProjects || []).map((project) => (
-              <div className="aa-mini-row" key={project.id || project.name}>
-                <span>{project.name}</span>
-                <strong>{project.allowed_origins || '*'}</strong>
-              </div>
-            ))}
+            <h3>Connected tier</h3>
+            <div className="aa-mini-row">
+              <span>Billing tier</span>
+              <strong>{settingsData.auth.tier || 'unknown'}</strong>
+            </div>
+            <div className="aa-mini-row">
+              <span>Selected project</span>
+              <strong>{formState.selectedProjectName || 'None yet'}</strong>
+            </div>
           </div>
         </div>
       </section>
@@ -105,121 +146,108 @@ export function SettingsSurface({
       <section className="aa-panel">
         <div className="aa-panel-header">
           <div>
-            <p className="aa-kicker">Rollout Controls</p>
-            <h2>Keep the live window short and the poll cadence explicit.</h2>
+            <p className="aa-kicker">Project Selection</p>
+            <h2>Choose one Agent Analytics project for this Paperclip company.</h2>
           </div>
-        </div>
-
-        <div className="aa-form-grid">
-          <label>
-            Agent Analytics base URL
-            <input
-              value={formState.agentAnalyticsBaseUrl}
-              onChange={(event) => setFormState((current) => ({ ...current, agentAnalyticsBaseUrl: event.target.value }))}
-            />
-          </label>
-          <label>
-            Live window seconds
-            <input
-              type="number"
-              value={formState.liveWindowSeconds}
-              onChange={(event) => setFormState((current) => ({ ...current, liveWindowSeconds: Number(event.target.value) }))}
-            />
-          </label>
-          <label>
-            Poll interval seconds
-            <input
-              type="number"
-              value={formState.pollIntervalSeconds}
-              onChange={(event) => setFormState((current) => ({ ...current, pollIntervalSeconds: Number(event.target.value) }))}
-            />
-          </label>
-          <label className="aa-checkbox">
-            <input
-              type="checkbox"
-              checked={formState.pluginEnabled}
-              onChange={(event) => setFormState((current) => ({ ...current, pluginEnabled: event.target.checked }))}
-            />
-            Plugin enabled
-          </label>
-        </div>
-
-        <div className="aa-inline-actions">
-          <button className="aa-button aa-button-primary" onClick={() => onSaveSettings(formState)}>
-            Save controls
-          </button>
-          <button className="aa-button aa-button-ghost" onClick={onReconnect}>
-            Revalidate connection
-          </button>
-        </div>
-      </section>
-
-      <section className="aa-panel">
-        <div className="aa-panel-header">
-          <div>
-            <p className="aa-kicker">Asset Mapping</p>
-            <h2>Explicit Paperclip asset to Agent Analytics project links.</h2>
-          </div>
-        </div>
-
-        <div className="aa-form-grid">
-          <label>
-            Asset key
-            <input value={mappingForm.assetKey} onChange={(event) => setMappingForm((current) => ({ ...current, assetKey: event.target.value }))} />
-          </label>
-          <label>
-            Label
-            <input value={mappingForm.label} onChange={(event) => setMappingForm((current) => ({ ...current, label: event.target.value }))} />
-          </label>
-          <label>
-            Kind
-            <select value={mappingForm.kind} onChange={(event) => setMappingForm((current) => ({ ...current, kind: event.target.value }))}>
-              <option value="website">website</option>
-              <option value="docs">docs</option>
-              <option value="app">app</option>
-              <option value="api">api</option>
-              <option value="other">other</option>
-            </select>
-          </label>
-          <label>
-            Paperclip project ID
-            <input value={mappingForm.paperclipProjectId} onChange={(event) => setMappingForm((current) => ({ ...current, paperclipProjectId: event.target.value }))} />
-          </label>
-          <label>
-            Agent Analytics project
-            <input value={mappingForm.agentAnalyticsProject} onChange={(event) => setMappingForm((current) => ({ ...current, agentAnalyticsProject: event.target.value }))} />
-          </label>
-          <label>
-            Primary hostname
-            <input value={mappingForm.primaryHostname} onChange={(event) => setMappingForm((current) => ({ ...current, primaryHostname: event.target.value }))} />
-          </label>
-          <label className="aa-checkbox">
-            <input
-              type="checkbox"
-              checked={mappingForm.enabled}
-              onChange={(event) => setMappingForm((current) => ({ ...current, enabled: event.target.checked }))}
-            />
-            Enabled
-          </label>
-        </div>
-
-        <div className="aa-inline-actions">
-          <button
-            className="aa-button aa-button-primary"
-            onClick={() => {
-              onUpsertMapping(mappingForm);
-              setMappingForm(EMPTY_MAPPING);
-            }}
-          >
-            Save mapping
-          </button>
         </div>
 
         <div className="aa-settings-stack">
-          {settingsData.settings.monitoredAssets.map((mapping) => (
-            <MappingRow key={mapping.assetKey} mapping={mapping} onRemove={onRemoveMapping} />
-          ))}
+          {(settingsData.discoveredProjects || []).map((project) => {
+            const isSelected = formState.selectedProjectName === project.name;
+            return (
+              <div className="aa-settings-row" key={project.id || project.name}>
+                <div>
+                  <strong>{project.name}</strong>
+                  <span>{normalizeOrigins(project.allowed_origins)}</span>
+                </div>
+                <button
+                  className={`aa-button ${isSelected ? 'aa-button-secondary' : 'aa-button-primary'}`}
+                  onClick={async () => {
+                    const nextState = {
+                      ...formState,
+                      selectedProjectId: project.id || '',
+                      selectedProjectName: project.name,
+                      selectedProjectLabel: project.name,
+                      selectedProjectAllowedOrigins: Array.isArray(project.allowed_origins)
+                        ? project.allowed_origins
+                        : project.allowed_origins && project.allowed_origins !== '*'
+                          ? String(project.allowed_origins).split(',').map((value) => value.trim()).filter(Boolean)
+                          : project.allowed_origins === '*'
+                            ? ['*']
+                            : [],
+                    };
+                    setFormState(nextState);
+                    await onSaveSettings(nextState);
+                  }}
+                >
+                  {isSelected ? 'Selected' : 'Use this project'}
+                </button>
+              </div>
+            );
+          })}
+          {!settingsData.discoveredProjects?.length ? (
+            <div className="aa-settings-stack">
+              <p className="aa-muted-note">No projects loaded yet.</p>
+              {settingsData.projectListError ? (
+                <p className="aa-muted-note">Project load error: {settingsData.projectListError}</p>
+              ) : (
+                <p className="aa-muted-note">If you connected before this fix, disconnect and connect again so the session includes `projects:read`.</p>
+              )}
+            </div>
+          ) : null}
         </div>
+      </section>
+
+      <section className="aa-panel">
+        <details>
+          <summary className="aa-kicker" style={{ cursor: 'pointer', userSelect: 'none' }}>
+            Advanced
+          </summary>
+          <div style={{ marginTop: 16 }}>
+            <div className="aa-form-grid">
+              <label>
+                Agent Analytics base URL
+                <input
+                  value={formState.agentAnalyticsBaseUrl}
+                  onChange={(event) => setFormState((current) => ({ ...current, agentAnalyticsBaseUrl: event.target.value }))}
+                />
+              </label>
+              <label>
+                Live window seconds
+                <input
+                  type="number"
+                  value={formState.liveWindowSeconds}
+                  onChange={(event) => setFormState((current) => ({ ...current, liveWindowSeconds: Number(event.target.value) }))}
+                />
+              </label>
+              <label>
+                Poll interval seconds
+                <input
+                  type="number"
+                  value={formState.pollIntervalSeconds}
+                  onChange={(event) => setFormState((current) => ({ ...current, pollIntervalSeconds: Number(event.target.value) }))}
+                />
+              </label>
+              <label className="aa-checkbox">
+                <input
+                  type="checkbox"
+                  checked={formState.pluginEnabled}
+                  onChange={(event) => setFormState((current) => ({ ...current, pluginEnabled: event.target.checked }))}
+                />
+                Plugin enabled
+              </label>
+            </div>
+
+            <div className="aa-inline-actions">
+              <button className="aa-button aa-button-primary" onClick={() => onSaveSettings(formState)}>
+                Save advanced settings
+              </button>
+              <button className="aa-button aa-button-ghost" onClick={onReconnect}>
+                Revalidate connection
+              </button>
+            </div>
+          </div>
+        </details>
       </section>
 
       {settingsData.validation.warnings.length > 0 ? (
@@ -233,4 +261,3 @@ export function SettingsSurface({
     </div>
   );
 }
-

@@ -18,6 +18,7 @@ import {
   applyTrackEventToAssetState,
   validateEnabledMappings,
 } from '../shared/live-state.js';
+import { createDefaultSettings } from '../shared/defaults.js';
 import { AgentAnalyticsClient } from '../shared/agent-analytics-client.js';
 import { closeLiveChannel, emitLiveState, openLiveChannel, registerActionHandler, registerDataHandler } from './paperclip.js';
 import { loadAuthState, loadSettings, loadSnoozes, saveAuthState, saveSettings, saveSnoozes } from './state.js';
@@ -34,6 +35,10 @@ function serializeAccount(account) {
     githubLogin: account.github_login || null,
     googleName: account.google_name || null,
   };
+}
+
+function isStreamLimitErrorMessage(message) {
+  return /STREAM_LIMIT|maximum 10 concurrent streams/i.test(String(message || ''));
 }
 
 function toPublicAuthState(auth) {
@@ -91,9 +96,9 @@ export class PaperclipLiveAnalyticsService {
   }
 
   async loadSettingsData({ companyId }) {
-    const settings = await loadSettings(this.ctx, companyId);
+    const settings = this.normalizeSettings(await loadSettings(this.ctx, companyId));
     const auth = await loadAuthState(this.ctx, companyId);
-    const validation = validateEnabledMappings(settings.monitoredAssets);
+    const validation = this.validateSettings(settings, auth);
     const projects = await this.listProjectsForCompany(companyId).catch((error) => ({
       projects: [],
       tier: auth.tier,
@@ -108,14 +113,25 @@ export class PaperclipLiveAnalyticsService {
     };
   }
 
-  async startAuth({ companyId, label }) {
-    const settings = await loadSettings(this.ctx, companyId);
+  async startAuth({ companyId, label, callbackUrl = null }) {
+    const settings = this.normalizeSettings(await loadSettings(this.ctx, companyId));
     const auth = await loadAuthState(this.ctx, companyId);
     const client = this.createClient(companyId, settings, auth);
-    const started = await client.startPaperclipAuth({ companyId, label });
+    const started = await client.startPaperclipAuth({
+      companyId,
+      label,
+      mode: callbackUrl ? 'interactive' : 'detached',
+      callbackUrl,
+    });
 
     const nextAuth = {
       ...auth,
+      accessToken: null,
+      refreshToken: null,
+      accessExpiresAt: null,
+      refreshExpiresAt: null,
+      accountSummary: null,
+      tier: null,
       status: 'pending',
       lastError: null,
       pendingAuthRequest: {
@@ -127,21 +143,33 @@ export class PaperclipLiveAnalyticsService {
       },
     };
     await saveAuthState(this.ctx, companyId, nextAuth);
-    return {
-      auth: toPublicAuthState(nextAuth),
-    };
+    return this.loadSettingsData({ companyId });
   }
 
   async completeAuth({ companyId, authRequestId, exchangeCode }) {
     const settings = await loadSettings(this.ctx, companyId);
     const auth = await loadAuthState(this.ctx, companyId);
+    if (auth.accessToken && !auth.pendingAuthRequest) {
+      return this.loadSettingsData({ companyId });
+    }
+
     const requestId = authRequestId || auth.pendingAuthRequest?.authRequestId;
     if (!requestId || !exchangeCode) {
       throw new Error('authRequestId and exchangeCode are required');
     }
 
     const client = this.createClient(companyId, settings, auth);
-    const exchanged = await client.exchangeAgentSession(requestId, exchangeCode);
+    let exchanged;
+    try {
+      exchanged = await client.exchangeAgentSession(requestId, exchangeCode);
+    } catch (error) {
+      const latestAuth = await loadAuthState(this.ctx, companyId);
+      if (latestAuth.accessToken && !latestAuth.pendingAuthRequest) {
+        return this.loadSettingsData({ companyId });
+      }
+      throw error;
+    }
+
     const nextAuth = {
       mode: 'agent_session',
       accessToken: exchanged.agent_session.access_token,
@@ -162,8 +190,11 @@ export class PaperclipLiveAnalyticsService {
   }
 
   async reconnectAuth({ companyId }) {
-    const settings = await loadSettings(this.ctx, companyId);
+    const settings = this.normalizeSettings(await loadSettings(this.ctx, companyId));
     const auth = await loadAuthState(this.ctx, companyId);
+    if (auth.pendingAuthRequest?.authRequestId && auth.pendingAuthRequest?.pollToken) {
+      return this.pollPendingAuth(companyId, settings, auth);
+    }
     if (!auth.refreshToken) {
       return this.startAuth({ companyId });
     }
@@ -193,6 +224,8 @@ export class PaperclipLiveAnalyticsService {
       refreshToken: null,
       accessExpiresAt: null,
       refreshExpiresAt: null,
+      accountSummary: null,
+      tier: null,
       status: 'disconnected',
       pendingAuthRequest: null,
       lastError: null,
@@ -203,18 +236,24 @@ export class PaperclipLiveAnalyticsService {
   }
 
   async savePluginSettings({ companyId, settings: partialSettings = {} }) {
-    const currentSettings = await loadSettings(this.ctx, companyId);
+    const currentSettings = this.normalizeSettings(await loadSettings(this.ctx, companyId));
+    const selectedProjectName = String(partialSettings.selectedProjectName ?? currentSettings.selectedProjectName ?? '').trim();
     const nextSettings = {
       ...currentSettings,
       agentAnalyticsBaseUrl: partialSettings.agentAnalyticsBaseUrl || currentSettings.agentAnalyticsBaseUrl || DEFAULT_BASE_URL,
       liveWindowSeconds: clampLiveWindowSeconds(partialSettings.liveWindowSeconds ?? currentSettings.liveWindowSeconds),
       pollIntervalSeconds: clampPollIntervalSeconds(partialSettings.pollIntervalSeconds ?? currentSettings.pollIntervalSeconds),
+      selectedProjectId: selectedProjectName ? String(partialSettings.selectedProjectId ?? currentSettings.selectedProjectId ?? '').trim() : '',
+      selectedProjectName,
+      selectedProjectLabel: selectedProjectName
+        ? String(partialSettings.selectedProjectLabel ?? currentSettings.selectedProjectLabel ?? selectedProjectName).trim()
+        : '',
+      selectedProjectAllowedOrigins: selectedProjectName
+        ? this.normalizeAllowedOrigins(partialSettings.selectedProjectAllowedOrigins ?? currentSettings.selectedProjectAllowedOrigins)
+        : [],
+      monitoredAssets: [],
       pluginEnabled: partialSettings.pluginEnabled ?? currentSettings.pluginEnabled,
     };
-    const validation = validateEnabledMappings(nextSettings.monitoredAssets);
-    if (validation.errors.length > 0) {
-      throw new Error(validation.errors.join(' '));
-    }
     await saveSettings(this.ctx, companyId, nextSettings);
     await this.ensureLiveState(companyId, { forceSync: true });
     return this.loadSettingsData({ companyId });
@@ -281,7 +320,7 @@ export class PaperclipLiveAnalyticsService {
   }
 
   async ensureLiveState(companyId, { forceSync = false } = {}) {
-    const settings = await loadSettings(this.ctx, companyId);
+    const settings = this.normalizeSettings(await loadSettings(this.ctx, companyId));
     const auth = await loadAuthState(this.ctx, companyId);
     const snoozes = await loadSnoozes(this.ctx, companyId);
 
@@ -292,28 +331,19 @@ export class PaperclipLiveAnalyticsService {
       await this.syncRuntime(companyId, settings, auth, runtime);
     }
 
-    const assetStates = settings.monitoredAssets.map((mapping) => {
-      const normalized = normalizeAssetMapping(mapping);
-      return runtime.assetStates.get(normalized.assetKey) || createEmptyAssetState(normalized);
-    });
-
-    const liveState = buildCompanyLiveState({
-      settings,
-      auth,
-      assets: assetStates,
-      snoozes,
-    });
-    runtime.lastState = liveState;
-    return liveState;
+    return this.composeLiveState(companyId, settings, auth, snoozes);
   }
 
   async syncRuntime(companyId, settings, auth, runtime) {
-    const mappings = settings.monitoredAssets.map(normalizeAssetMapping);
+    const selectedMapping = this.getSelectedProjectMapping(settings);
+    const mappings = selectedMapping ? [selectedMapping] : [];
     const validation = validateEnabledMappings(mappings);
-    if (!settings.pluginEnabled || !auth.accessToken || validation.errors.length > 0) {
-      auth.status = validation.errors.length > 0 ? 'error' : auth.status;
-      if (validation.errors.length > 0) auth.lastError = validation.errors.join(' ');
-      await saveAuthState(this.ctx, companyId, auth);
+    if (!settings.pluginEnabled || !auth.accessToken || !selectedMapping || validation.errors.length > 0) {
+      if (validation.errors.length > 0) {
+        auth.status = 'error';
+        auth.lastError = validation.errors.join(' ');
+        await saveAuthState(this.ctx, companyId, auth);
+      }
       await this.stopRuntime(companyId, { keepState: true });
       return;
     }
@@ -418,6 +448,112 @@ export class PaperclipLiveAnalyticsService {
     return runtime;
   }
 
+  normalizeAllowedOrigins(input) {
+    if (Array.isArray(input)) {
+      return input.map((value) => String(value).trim()).filter(Boolean);
+    }
+    if (typeof input === 'string') {
+      return input === '*' ? ['*'] : input.split(',').map((value) => value.trim()).filter(Boolean);
+    }
+    return [];
+  }
+
+  normalizeSettings(settings = {}) {
+    const next = {
+      ...createDefaultSettings(),
+      ...(settings || {}),
+    };
+
+    if (!next.selectedProjectName && Array.isArray(next.monitoredAssets) && next.monitoredAssets.length > 0) {
+      const legacy = normalizeAssetMapping(next.monitoredAssets[0]);
+      next.selectedProjectName = legacy.agentAnalyticsProject;
+      next.selectedProjectLabel = legacy.label || legacy.agentAnalyticsProject;
+      next.selectedProjectAllowedOrigins = legacy.allowedOrigins || [];
+    }
+
+    next.selectedProjectId = String(next.selectedProjectId || '').trim();
+    next.selectedProjectName = String(next.selectedProjectName || '').trim();
+    next.selectedProjectLabel = String(next.selectedProjectLabel || next.selectedProjectName || '').trim();
+    next.selectedProjectAllowedOrigins = this.normalizeAllowedOrigins(next.selectedProjectAllowedOrigins);
+    next.monitoredAssets = Array.isArray(next.monitoredAssets) ? next.monitoredAssets : [];
+    return next;
+  }
+
+  getSelectedProjectMapping(settings) {
+    if (!settings.selectedProjectName) return null;
+    return normalizeAssetMapping({
+      assetKey: settings.selectedProjectName,
+      label: settings.selectedProjectLabel || settings.selectedProjectName,
+      kind: 'other',
+      agentAnalyticsProject: settings.selectedProjectName,
+      allowedOrigins: settings.selectedProjectAllowedOrigins,
+      enabled: true,
+    });
+  }
+
+  validateSettings(settings, auth) {
+    const warnings = [];
+    if (auth.accessToken && !settings.selectedProjectName) {
+      warnings.push('Select one Agent Analytics project to start the live monitor.');
+    }
+    return { warnings, errors: [] };
+  }
+
+  async pollPendingAuth(companyId, settings, auth) {
+    const requestId = auth.pendingAuthRequest?.authRequestId;
+    const pollToken = auth.pendingAuthRequest?.pollToken;
+    if (!requestId || !pollToken) {
+      return this.loadSettingsData({ companyId });
+    }
+
+    const client = this.createClient(companyId, settings, auth);
+    try {
+      const polled = await client.pollAgentSession(requestId, pollToken);
+      if (polled.status === 'pending') {
+        return this.loadSettingsData({ companyId });
+      }
+      if (!polled.exchange_code) {
+        throw new Error('Approval completed without an exchange code.');
+      }
+
+      const exchanged = await client.exchangeAgentSession(requestId, polled.exchange_code);
+      const nextAuth = {
+        mode: 'agent_session',
+        accessToken: exchanged.agent_session.access_token,
+        refreshToken: exchanged.agent_session.refresh_token,
+        accessExpiresAt: exchanged.agent_session.access_expires_at,
+        refreshExpiresAt: exchanged.agent_session.refresh_expires_at,
+        accountSummary: serializeAccount(exchanged.account),
+        tier: exchanged.account?.tier || null,
+        status: 'connected',
+        pendingAuthRequest: null,
+        lastValidatedAt: Date.now(),
+        lastError: null,
+      };
+
+      await saveAuthState(this.ctx, companyId, nextAuth);
+      await this.ensureLiveState(companyId, { forceSync: true });
+      return this.loadSettingsData({ companyId });
+    } catch (error) {
+      const message = error.message || String(error);
+      if (/expired|revoked|invalid auth request/i.test(message)) {
+        await saveAuthState(this.ctx, companyId, {
+          ...auth,
+          accessToken: null,
+          refreshToken: null,
+          accessExpiresAt: null,
+          refreshExpiresAt: null,
+          accountSummary: null,
+          tier: null,
+          status: 'disconnected',
+          pendingAuthRequest: null,
+          lastError: message,
+        });
+      }
+      return this.loadSettingsData({ companyId });
+    }
+  }
+
   startStreamLoop(companyId, settings, auth, mappings) {
     const controller = new AbortController();
     const runtime = {
@@ -462,6 +598,13 @@ export class PaperclipLiveAnalyticsService {
     const runtime = this.getRuntime(companyId);
     const currentState = runtime.assetStates.get(mapping.assetKey) || createEmptyAssetState(mapping);
     runtime.assetStates.set(mapping.assetKey, applySnapshotToAssetState(currentState, snapshot, mapping));
+    if (auth.accessToken && (auth.status !== 'connected' || auth.lastError)) {
+      await saveAuthState(this.ctx, companyId, {
+        ...auth,
+        status: 'connected',
+        lastError: null,
+      });
+    }
     await this.publish(companyId);
   }
 
@@ -478,29 +621,52 @@ export class PaperclipLiveAnalyticsService {
     const runtime = this.getRuntime(companyId);
     const current = runtime.assetStates.get(assetKey);
     if (!current) return;
+    const message = error.message || String(error);
     runtime.assetStates.set(assetKey, {
       ...current,
-      status: 'error',
-      errors: [error.message || String(error)],
+      status: isStreamLimitErrorMessage(message) && current.lastSnapshotAt ? 'live' : 'error',
+      errors: [message],
       lastUpdatedAt: Date.now(),
     });
 
-    const auth = await loadAuthState(this.ctx, companyId);
-    await saveAuthState(this.ctx, companyId, {
-      ...auth,
-      status: 'error',
-      lastError: error.message || String(error),
-    });
+    if (!isStreamLimitErrorMessage(message)) {
+      const auth = await loadAuthState(this.ctx, companyId);
+      await saveAuthState(this.ctx, companyId, {
+        ...auth,
+        status: 'error',
+        lastError: message,
+      });
+    }
     await this.publish(companyId);
   }
 
   async publish(companyId) {
-    const liveState = await this.ensureLiveState(companyId);
+    const settings = this.normalizeSettings(await loadSettings(this.ctx, companyId));
+    const auth = await loadAuthState(this.ctx, companyId);
+    const snoozes = await loadSnoozes(this.ctx, companyId);
+    const liveState = this.composeLiveState(companyId, settings, auth, snoozes);
     await emitLiveState(this.ctx, companyId, liveState);
   }
 
+  composeLiveState(companyId, settings, auth, snoozes) {
+    const runtime = this.getRuntime(companyId);
+    const selectedMapping = this.getSelectedProjectMapping(settings);
+    const assetStates = selectedMapping
+      ? [runtime.assetStates.get(selectedMapping.assetKey) || createEmptyAssetState(selectedMapping)]
+      : [];
+
+    const liveState = buildCompanyLiveState({
+      settings,
+      auth,
+      assets: assetStates,
+      snoozes,
+    });
+    runtime.lastState = liveState;
+    return liveState;
+  }
+
   async listProjectsForCompany(companyId) {
-    const settings = await loadSettings(this.ctx, companyId);
+    const settings = this.normalizeSettings(await loadSettings(this.ctx, companyId));
     const auth = await loadAuthState(this.ctx, companyId);
     if (!auth.accessToken) {
       return { projects: [], tier: auth.tier, error: null };
@@ -532,4 +698,3 @@ export class PaperclipLiveAnalyticsService {
     await closeLiveChannel(this.ctx, companyId);
   }
 }
-

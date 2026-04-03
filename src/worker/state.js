@@ -16,19 +16,21 @@ function createScope(companyId) {
 async function getValue(ctx, companyId, key, fallbackValue) {
   if (!ctx?.state?.get) return fallbackValue;
   const value = await ctx.state.get({
-    ...createScope(companyId),
-    key,
+    ...createScope(String(companyId)),
+    stateKey: key,
   });
   return value ?? fallbackValue;
 }
 
 async function setValue(ctx, companyId, key, value) {
   if (!ctx?.state?.set) return value;
-  await ctx.state.set({
-    ...createScope(companyId),
-    key,
-    value,
-  });
+  await ctx.state.set(
+    {
+      ...createScope(String(companyId)),
+      stateKey: key,
+    },
+    value
+  );
   return value;
 }
 
@@ -55,4 +57,3 @@ export async function loadSnoozes(ctx, companyId) {
 export async function saveSnoozes(ctx, companyId, snoozes) {
   return setValue(ctx, companyId, 'snoozes', snoozes);
 }
-

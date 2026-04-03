@@ -384,6 +384,27 @@ select {
   margin: 0 auto;
 }
 
+.aa-widget-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.aa-widget-brandmark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  object-fit: contain;
+  box-shadow: 0 10px 24px rgba(31, 42, 42, 0.12);
+}
+
+.aa-widget-brand-label {
+  font-size: 0.92rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
 .aa-widget-metrics {
   margin: 18px 0;
 }
@@ -480,4 +501,3 @@ select {
     flex-direction: column;
   }
 }
-

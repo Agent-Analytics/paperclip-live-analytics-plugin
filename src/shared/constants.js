@@ -1,5 +1,6 @@
 export const PLUGIN_ID = '@agent-analytics/paperclip-live-analytics-plugin';
 export const PLUGIN_DISPLAY_NAME = 'Agent Analytics Live';
+export const PLUGIN_PAGE_ROUTE = 'agent-analytics-live';
 export const DEFAULT_BASE_URL = 'https://api.agentanalytics.sh';
 export const DEFAULT_LIVE_WINDOW_SECONDS = 60;
 export const DEFAULT_POLL_INTERVAL_SECONDS = 15;
@@ -32,10 +33,10 @@ export const ACTION_KEYS = {
 
 export const AGENT_SESSION_SCOPES = [
   'account:read',
+  'projects:read',
   'projects:write',
   'analytics:read',
   'live:read',
 ];
 
 export const ASSET_KINDS = ['website', 'docs', 'app', 'api', 'other'];
-

@@ -92,7 +92,7 @@ function EvidenceColumn({ liveState }) {
   );
 }
 
-function AssetCard({ asset, onSnooze, basePath }) {
+function AssetCard({ asset, onSnooze }) {
   return (
     <article className={`aa-asset-card aa-asset-card-${asset.kind}`}>
       <div className="aa-asset-topline">
@@ -145,13 +145,7 @@ function AssetCard({ asset, onSnooze, basePath }) {
       </div>
 
       <div className="aa-asset-actions">
-        {asset.paperclipProjectId ? (
-          <a className="aa-button aa-button-secondary" href={`${basePath || ''}/projects/${asset.paperclipProjectId}`}>
-            Open mapped project
-          </a>
-        ) : (
-          <span className="aa-muted-note">No Paperclip project linked yet</span>
-        )}
+        <span className="aa-muted-note">One Paperclip company, one live Agent Analytics project.</span>
         <button className="aa-button aa-button-ghost" onClick={() => onSnooze(asset.assetKey)}>
           Snooze 30m
         </button>
@@ -160,7 +154,7 @@ function AssetCard({ asset, onSnooze, basePath }) {
   );
 }
 
-export function PageSurface({ liveState, onSnooze, basePath = '' }) {
+export function PageSurface({ liveState, onSnooze }) {
   return (
     <div className="aa-page-shell">
       <header className="aa-hero">
@@ -202,17 +196,16 @@ export function PageSurface({ liveState, onSnooze, basePath = '' }) {
       <section className="aa-assets-section">
         <div className="aa-panel-header">
           <div>
-            <p className="aa-kicker">Mapped Assets</p>
-            <h2>Each card ties live movement back to an owned company asset.</h2>
+            <p className="aa-kicker">Selected Project</p>
+            <h2>One company-scoped Agent Analytics project feeds the live monitor.</h2>
           </div>
         </div>
         <div className="aa-asset-grid">
           {liveState.assets.map((asset) => (
-            <AssetCard key={asset.assetKey} asset={asset} onSnooze={onSnooze} basePath={basePath} />
+            <AssetCard key={asset.assetKey} asset={asset} onSnooze={onSnooze} />
           ))}
         </div>
       </section>
     </div>
   );
 }
-

@@ -321,7 +321,11 @@ export function buildCompanyLiveState({ settings, auth, assets, snoozes = {}, no
     }
   }
 
-  const warnings = validateEnabledMappings(settings.monitoredAssets).warnings;
+  const configuredProjectCount = settings.selectedProjectName ? 1 : settings.monitoredAssets?.length || 0;
+  const warnings = [];
+  if (auth.status === 'connected' && !settings.selectedProjectName) {
+    warnings.push('Select one Agent Analytics project in settings to start the live monitor.');
+  }
   const countries = sortCountries(Array.from(countryMap.values())).slice(0, 12);
   const sortedAssets = [...visibleAssets].sort((left, right) => {
     if ((right.eventsPerMinute || 0) !== (left.eventsPerMinute || 0)) return (right.eventsPerMinute || 0) - (left.eventsPerMinute || 0);
@@ -338,14 +342,16 @@ export function buildCompanyLiveState({ settings, auth, assets, snoozes = {}, no
     status: auth.status === 'connected' ? 'live' : auth.status === 'error' ? 'error' : 'idle',
     label: auth.status === 'connected' ? 'Connected' : auth.status === 'error' ? 'Attention needed' : 'Not connected',
     detail: auth.status === 'connected'
-      ? `Showing ${sortedAssets.length} visible asset${sortedAssets.length === 1 ? '' : 's'} from the current live window.`
+      ? settings.selectedProjectName
+        ? `Showing live state for ${settings.selectedProjectName}.`
+        : 'Connected. Select one Agent Analytics project in settings to start the live feed.'
       : auth.lastError || 'Connect Agent Analytics from settings to start the live feed.',
   };
   liveState.metrics = {
     activeVisitors,
     activeSessions,
     eventsPerMinute,
-    assetsConfigured: settings.monitoredAssets.length,
+    assetsConfigured: configuredProjectCount,
     assetsVisible: sortedAssets.length,
     countriesTracked: countries.length,
   };
@@ -381,4 +387,3 @@ export function deriveWidgetSummary(companyLiveState) {
     warnings: companyLiveState.warnings,
   };
 }
-

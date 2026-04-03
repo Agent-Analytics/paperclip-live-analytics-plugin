@@ -16,11 +16,11 @@ function createMockCtx() {
     registrations,
     ctx: {
       state: {
-        async get({ namespace, scopeId, key }) {
-          return store.get(`${namespace}:${scopeId}:${key}`);
+        async get({ namespace, scopeId, stateKey }) {
+          return store.get(`${namespace}:${scopeId}:${stateKey}`);
         },
-        async set({ namespace, scopeId, key, value }) {
-          store.set(`${namespace}:${scopeId}:${key}`, value);
+        async set({ namespace, scopeId, stateKey }, value) {
+          store.set(`${namespace}:${scopeId}:${stateKey}`, value);
         },
       },
       data: {
@@ -52,23 +52,62 @@ test('service registers expected data and action handlers', async () => {
   assert.equal(registrations.actions.size, 9);
 });
 
-test('upsertMapping stores normalized mapping in company state', async () => {
+test('savePluginSettings stores the selected project in company state', async () => {
   const { ctx } = createMockCtx();
-  await ctx.state.set({ namespace: 'agent-analytics-live', scopeId: 'company_1', key: 'config', value: createDefaultSettings() });
-  await ctx.state.set({ namespace: 'agent-analytics-live', scopeId: 'company_1', key: 'auth', value: createDefaultAuthState() });
+  await ctx.state.set({ namespace: 'agent-analytics-live', scopeId: 'company_1', stateKey: 'config' }, createDefaultSettings());
+  await ctx.state.set({ namespace: 'agent-analytics-live', scopeId: 'company_1', stateKey: 'auth' }, createDefaultAuthState());
   const service = new PaperclipLiveAnalyticsService(ctx);
 
-  await service.upsertMapping({
+  await service.savePluginSettings({
     companyId: 'company_1',
-    mapping: {
-      label: 'Marketing Site',
-      kind: 'website',
-      agentAnalyticsProject: 'agentanalytics-sh',
-      primaryHostname: 'agentanalytics.sh',
+    settings: {
+      selectedProjectId: 'proj_1',
+      selectedProjectName: 'agentanalytics-sh',
+      selectedProjectLabel: 'agentanalytics-sh',
+      selectedProjectAllowedOrigins: ['*'],
     },
   });
 
-  const settings = await ctx.state.get({ namespace: 'agent-analytics-live', scopeId: 'company_1', key: 'config' });
-  assert.equal(settings.monitoredAssets.length, 1);
-  assert.equal(settings.monitoredAssets[0].assetKey, 'marketing-site');
+  const settings = await ctx.state.get({ namespace: 'agent-analytics-live', scopeId: 'company_1', stateKey: 'config' });
+  assert.equal(settings.selectedProjectId, 'proj_1');
+  assert.equal(settings.selectedProjectName, 'agentanalytics-sh');
+  assert.deepEqual(settings.selectedProjectAllowedOrigins, ['*']);
+});
+
+test('completeAuth is idempotent after the session is already connected', async () => {
+  const { ctx } = createMockCtx();
+  await ctx.state.set({ namespace: 'agent-analytics-live', scopeId: 'company_1', stateKey: 'config' }, createDefaultSettings());
+  await ctx.state.set(
+    { namespace: 'agent-analytics-live', scopeId: 'company_1', stateKey: 'auth' },
+    {
+      ...createDefaultAuthState(),
+      accessToken: 'access_1',
+      refreshToken: 'refresh_1',
+      status: 'connected',
+      accountSummary: { email: 'danny@example.com' },
+      tier: 'pro',
+      pendingAuthRequest: null,
+    }
+  );
+
+  let fetchCalls = 0;
+  const service = new PaperclipLiveAnalyticsService(ctx, {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return new Response(JSON.stringify({ projects: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    },
+  });
+
+  const result = await service.completeAuth({
+    companyId: 'company_1',
+    authRequestId: 'req_1',
+    exchangeCode: 'aae_duplicate',
+  });
+
+  assert.equal(result.auth.connected, true);
+  assert.equal(result.auth.accountSummary.email, 'danny@example.com');
+  assert.equal(fetchCalls, 1);
 });

@@ -80,13 +80,14 @@ export function usePluginAction(key) {
               authRequestId: 'req_demo',
               authorizeUrl: 'https://api.agentanalytics.sh/agent-sessions/authorize/req_demo',
               approvalCode: 'ABCD2345',
+              pollToken: 'aap_demo',
               expiresAt: Date.now() + 600_000,
             },
           },
         };
       }
 
-      if (key === ACTION_KEYS.settingsSave || key === ACTION_KEYS.mappingUpsert || key === ACTION_KEYS.mappingRemove) {
+      if (key === ACTION_KEYS.settingsSave) {
         return demoSettingsData;
       }
 
@@ -123,4 +124,3 @@ export function usePluginStream(channel, { companyId, onEvent }) {
     return () => clearInterval(intervalId);
   }, [bridge, channel, companyId, onEvent]);
 }
-

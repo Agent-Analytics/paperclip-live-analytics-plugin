@@ -44,6 +44,22 @@ function parseSseEvent(rawEvent) {
   return event;
 }
 
+function findSseBoundary(buffer) {
+  const lfIndex = buffer.indexOf('\n\n');
+  const crlfIndex = buffer.indexOf('\r\n\r\n');
+
+  if (lfIndex === -1) {
+    return crlfIndex === -1 ? null : { index: crlfIndex, length: 4 };
+  }
+  if (crlfIndex === -1) {
+    return { index: lfIndex, length: 2 };
+  }
+
+  return lfIndex < crlfIndex
+    ? { index: lfIndex, length: 2 }
+    : { index: crlfIndex, length: 4 };
+}
+
 export class AgentAnalyticsClient {
   constructor({
     auth = null,
@@ -84,15 +100,16 @@ export class AgentAnalyticsClient {
     return data;
   }
 
-  async startPaperclipAuth({ companyId, label } = {}) {
+  async startPaperclipAuth({ companyId, label, mode = 'detached', callbackUrl = null } = {}) {
     return this.request(
       'POST',
       '/agent-sessions/start',
       {
-        mode: 'detached',
+        mode,
         client_type: 'paperclip',
         client_name: PLUGIN_DISPLAY_NAME,
         client_instance_id: companyId || null,
+        callback_url: callbackUrl,
         label: label || `Paperclip Company ${companyId || ''}`.trim(),
         scopes: AGENT_SESSION_SCOPES,
         metadata: {
@@ -112,6 +129,18 @@ export class AgentAnalyticsClient {
       {
         auth_request_id: authRequestId,
         exchange_code: exchangeCode,
+      },
+      { retryOnRefresh: false }
+    );
+  }
+
+  async pollAgentSession(authRequestId, pollToken) {
+    return this.request(
+      'POST',
+      '/agent-sessions/poll',
+      {
+        auth_request_id: authRequestId,
+        poll_token: pollToken,
       },
       { retryOnRefresh: false }
     );
@@ -174,10 +203,10 @@ export class AgentAnalyticsClient {
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
-      let boundary = buffer.indexOf('\n\n');
-      while (boundary !== -1) {
-        const rawEvent = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
+      let boundary = findSseBoundary(buffer);
+      while (boundary) {
+        const rawEvent = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary.length);
         const event = parseSseEvent(rawEvent);
 
         if (event.comment) {
@@ -196,9 +225,8 @@ export class AgentAnalyticsClient {
           if (event.event === 'track') onTrack?.(parsed);
         }
 
-        boundary = buffer.indexOf('\n\n');
+        boundary = findSseBoundary(buffer);
       }
     }
   }
 }
-

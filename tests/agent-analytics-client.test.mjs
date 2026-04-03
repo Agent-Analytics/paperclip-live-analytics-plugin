@@ -58,6 +58,23 @@ test('startPaperclipAuth sends detached paperclip metadata', async () => {
   assert.equal(body.client_instance_id, 'company_1');
 });
 
+test('pollAgentSession posts auth request id and poll token', async () => {
+  let body;
+  const client = new AgentAnalyticsClient({
+    fetchImpl: async (_url, options) => {
+      body = JSON.parse(options.body);
+      return new Response(JSON.stringify({ status: 'pending' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  const result = await client.pollAgentSession('req_1', 'aap_1');
+  assert.deepEqual(result, { status: 'pending' });
+  assert.deepEqual(body, {
+    auth_request_id: 'req_1',
+    poll_token: 'aap_1',
+  });
+});
+
 test('subscribeToStream parses connected and track SSE events', async () => {
   const encoder = new TextEncoder();
   const body = new ReadableStream({
@@ -88,3 +105,29 @@ test('subscribeToStream parses connected and track SSE events', async () => {
   ]);
 });
 
+test('subscribeToStream parses CRLF-delimited SSE events', async () => {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode('event: connected\r\ndata: {"project":"site-live"}\r\n\r\n'));
+      controller.enqueue(encoder.encode('event: track\r\ndata: {"event":"page_view","timestamp":43,"country":"IL"}\r\n\r\n'));
+      controller.close();
+    },
+  });
+
+  const seen = [];
+  const client = new AgentAnalyticsClient({
+    fetchImpl: async () => new Response(body, { status: 200 }),
+  });
+
+  await client.subscribeToStream({
+    project: 'site-live',
+    onConnected: (payload) => seen.push({ type: 'connected', payload }),
+    onTrack: (payload) => seen.push({ type: 'track', payload }),
+  });
+
+  assert.deepEqual(seen, [
+    { type: 'connected', payload: { project: 'site-live' } },
+    { type: 'track', payload: { event: 'page_view', timestamp: 43, country: 'IL' } },
+  ]);
+});
