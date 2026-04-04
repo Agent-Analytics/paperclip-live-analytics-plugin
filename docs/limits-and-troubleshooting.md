@@ -14,3 +14,12 @@
 - no live data with a free tier: upgrade the connected account
 - stale UI while connection is healthy: check whether the asset is snoozed or disabled
 
+## Quick checks
+
+If the plugin looks healthy but the data looks wrong, check these first:
+
+1. The connected account has access to the right Agent Analytics projects
+2. The mapped projects are the ones actually receiving traffic
+3. The account tier supports `/live`
+4. The asset is enabled and not snoozed in plugin settings
+5. Multiple assets are not pointing at the same Agent Analytics project unless that mirroring is intentional

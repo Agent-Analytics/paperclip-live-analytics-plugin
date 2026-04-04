@@ -1,12 +1,37 @@
 # Agent Analytics Live for Paperclip
 
-Thin live-monitor plugin for Paperclip companies that want Agent Analytics signals where operators already work.
+Agent Analytics Live is the Paperclip plugin for operators who want live web activity where they already run the company.
 
-Setup guide:
+It brings a company-level live monitor, a dashboard widget, and a sidebar entry into Paperclip so teams can answer one question quickly:
 
-[Install and set up Agent Analytics for Paperclip](https://docs.agentanalytics.sh/guides/paperclip/)
+Which company asset is moving right now, and is that movement worth attention?
 
-## Quick install in Paperclip UI
+## Screenshot
+
+![Agent Analytics Live widget inside the Paperclip dashboard](./src/ui/assets/aa-in-dashboard.jpg)
+
+## What ships in v1
+
+- `page`: company-level live operator view
+- `dashboardWidget`: compact live summary on the main dashboard
+- `sidebar`: left-nav entry that opens the live page
+- `settingsPage`: login-first auth, asset mapping, and rollout controls
+- Worker-owned Agent Analytics auth, `/live` polling, `/stream` SSE fan-out, and company-scoped live cache
+
+## Requirements
+
+- An Agent Analytics account
+- A Paperclip instance with plugin support
+- Access to Agent Analytics live routes
+
+Notes:
+
+- `/stream` and `/live` are live routes, and `/live` is paid-only
+- The plugin is intentionally a live monitor, not a historical reporting surface
+
+Create or access your Agent Analytics account at [agentanalytics.sh](https://agentanalytics.sh).
+
+## Install In Paperclip UI
 
 1. In Paperclip, open `Settings` -> `Plugins`.
 2. Click `Install Plugin`.
@@ -17,67 +42,57 @@ Setup guide:
 ```
 
 4. Click `Install`.
-5. Open the plugin `Configure` page and connect your Agent Analytics account.
+5. Open the plugin `Configure` page.
 
-## Screenshot
-
-![Agent Analytics Live widget inside the Paperclip dashboard](./src/ui/assets/aa-in-dashboard.jpg)
-
-## Requirements
-
-- An Agent Analytics account
-- A Paperclip instance with plugin support
-
-Create or access your Agent Analytics account at:
-
-[agentanalytics.sh](https://agentanalytics.sh)
-
-## Install
+## Install By CLI
 
 ```bash
 npx paperclipai plugin install @agent-analytics/paperclip-live-analytics-plugin
 ```
 
-After install, connect the plugin to your Agent Analytics account from the plugin settings page.
+## First-Run Setup
 
-## What ships in v1
+1. Open the plugin `settingsPage`.
+2. Click `Start login`.
+3. Open the returned approval URL.
+4. Sign in with Google or GitHub.
+5. Paste the finish code into the settings page.
+6. Let the worker validate `GET /projects` and start live sync.
+7. Map your Paperclip assets to Agent Analytics projects and enable the surfaces you want to expose.
 
-- `page`: company-level live operator view
-- `dashboardWidget`: compact live summary
-- `sidebar`: left-nav entry that opens the live page
-- `settingsPage`: login-first auth, explicit asset mapping, rollout controls
-- Worker-owned Agent Analytics auth, `/live` polling, `/stream` SSE fan-out, and company-scoped live cache
+Full Paperclip company setup guide:
 
-## Package name
+[Install and set up Agent Analytics for Paperclip](https://docs.agentanalytics.sh/guides/paperclip/)
+
+## Docs
+
+- [Operator overview](./docs/operator-overview.md)
+- [Setup and auth](./docs/setup-auth.md)
+- [Asset mapping guide](./docs/asset-mapping.md)
+- [Live behavior](./docs/live-behavior.md)
+- [Limits and troubleshooting](./docs/limits-and-troubleshooting.md)
+- [Maintainer notes](./docs/MAINTAINER.md)
+
+## Package Name
 
 `@agent-analytics/paperclip-live-analytics-plugin`
 
-## Local status
-
-This package is scaffolded inside the main Agent Analytics workspace so it can be implemented and reviewed in one place. It is structured to move into its own standalone repo without code changes.
-
-## Scripts
+## Development
 
 ```bash
-cd paperclip-live-analytics-plugin
-npm test
-npm run build
-npm pack
-```
-
-`npm test` only exercises the dependency-light worker/shared logic. `npm run build` expects the React/Vite dependencies in `package.json`.
-
-## Publish checklist
-
-```bash
-cd paperclip-live-analytics-plugin
 npm install
 npm test
 npm run build
-npm publish --access public
 ```
 
-The package is configured for public scoped npm publishing.
+Helpful local commands:
+
+```bash
+npm run pack:local
+npm run reinstall:local
+```
+
+`npm test` exercises the dependency-light worker/shared logic. `npm run build` builds the Paperclip worker and UI entrypoints defined in `package.json`.
 
 ## Files
 
@@ -85,9 +100,3 @@ The package is configured for public scoped npm publishing.
 - `src/worker/`: worker setup, auth, live polling, SSE fan-out, state persistence
 - `src/ui/`: React surfaces for page, widget, and settings
 - `docs/`: operator and maintainer docs shipped with the plugin
-
-## Local standalone repo
-
-This directory is intended to become its own repository at:
-
-`https://github.com/Agent-Analytics/paperclip-live-analytics-plugin`
