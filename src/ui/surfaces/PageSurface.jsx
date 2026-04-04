@@ -1,4 +1,5 @@
 import { CountryMapPanel } from '../components/CountryMapPanel.jsx';
+import { AGENT_ANALYTICS_WIDGET_LOGO } from './WidgetSurface.jsx';
 
 function formatRelativeTime(timestamp) {
   if (!timestamp) return 'No updates yet';
@@ -154,17 +155,28 @@ function AssetCard({ asset, onSnooze }) {
 }
 
 export function PageSurface({ liveState, onSnooze }) {
+  const primaryAsset = liveState.assets[0] || null;
+  const projectName = primaryAsset?.agentAnalyticsProject || primaryAsset?.label || 'Agent Analytics';
+  const title = `${projectName} live map`;
+  const accountLabel = liveState.account?.email || 'No connected account';
+
   return (
     <div className="aa-page-shell">
-      <header className="aa-hero">
-        <div>
-          <p className="aa-kicker">Agent Analytics Live</p>
-          <h1>Ambient pulse for the company, backed by raw evidence.</h1>
-          <p className="aa-hero-copy">{liveState.connection.detail}</p>
+      <header className="aa-live-header">
+        <div className="aa-live-header-main">
+          <img className="aa-live-header-logo" src={AGENT_ANALYTICS_WIDGET_LOGO} alt="Agent Analytics" />
+          <div>
+            <p className="aa-kicker">Agent Analytics</p>
+            <h1>{title}</h1>
+            <p className="aa-live-header-copy">Country-level real-time traffic for one Agent Analytics project at a time.</p>
+          </div>
         </div>
-        <div className="aa-hero-status">
+        <div className="aa-live-header-status">
           <span className={`aa-status-pill aa-status-${liveState.connection.status}`}>{liveState.connection.label}</span>
-          <p>{liveState.account?.email || 'No connected account'}</p>
+          <div className="aa-live-header-meta">
+            <span>{accountLabel}</span>
+            <span>{liveState.connection.detail}</span>
+          </div>
         </div>
       </header>
 
