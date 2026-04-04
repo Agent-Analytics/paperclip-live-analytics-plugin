@@ -55,6 +55,11 @@ select {
   margin: 0 auto;
 }
 
+.aa-settings-shell {
+  display: grid;
+  gap: 18px;
+}
+
 .aa-live-header,
 .aa-panel,
 .aa-widget,
@@ -598,6 +603,33 @@ select {
   color: var(--aa-accent);
 }
 
+.aa-button-light {
+  background: #fff;
+  color: #111;
+  border: 1px solid rgba(17, 17, 17, 0.08);
+}
+
+.aa-button-light:hover {
+  background: rgba(255, 255, 255, 0.92);
+  color: #111;
+}
+
+.aa-button-hero {
+  padding: 14px 22px;
+  font-size: 1rem;
+}
+
+.aa-button-danger {
+  background: color-mix(in srgb, var(--announcement-soft) 82%, transparent);
+  color: var(--aa-error);
+  border: 1px solid color-mix(in srgb, var(--aa-error) 18%, transparent);
+}
+
+.aa-button-danger:hover {
+  background: color-mix(in srgb, var(--announcement-soft) 92%, transparent);
+  color: var(--aa-error);
+}
+
 .aa-button-ghost {
   background: transparent;
   color: var(--aa-muted);
@@ -742,6 +774,83 @@ select {
   padding: 16px;
   border-radius: 18px;
   background: var(--aa-panel-soft);
+}
+
+.aa-settings-login-shell {
+  position: relative;
+  min-height: 520px;
+  overflow: hidden;
+}
+
+.aa-settings-login-status {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.aa-settings-empty-auth {
+  min-height: 430px;
+  display: grid;
+  place-items: center;
+  gap: 22px;
+  text-align: center;
+  padding: 36px 20px 28px;
+}
+
+.aa-settings-empty-auth-copy {
+  display: grid;
+  gap: 10px;
+  max-width: 44ch;
+}
+
+.aa-settings-login-logo {
+  width: 96px;
+  height: 96px;
+  border-radius: 28px;
+  box-shadow: var(--aa-shadow);
+}
+
+.aa-settings-empty-auth-copy strong {
+  font-family: var(--aa-serif);
+  font-size: clamp(2.8rem, 5vw, 4rem);
+  line-height: 0.96;
+}
+
+.aa-settings-empty-auth-copy span {
+  color: var(--aa-muted);
+  font-size: 1.15rem;
+  line-height: 1.5;
+}
+
+.aa-settings-login-card {
+  display: grid;
+  gap: 18px;
+  width: min(560px, 100%);
+  padding: 34px 28px;
+  border-radius: 28px;
+  background: var(--aa-panel-strong);
+  border: 1px solid var(--aa-panel-stroke-soft);
+  box-shadow: var(--aa-shadow);
+}
+
+.aa-settings-login-message {
+  margin: 0;
+  color: var(--aa-accent-warm);
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+:root[data-theme='dark'] .aa-settings-login-card .aa-button-primary,
+.dark .aa-settings-login-card .aa-button-primary,
+.dark-theme .aa-settings-login-card .aa-button-primary {
+  background: #fff;
+  color: #111;
+}
+
+:root[data-theme='dark'] .aa-settings-login-card .aa-button-primary:hover,
+.dark .aa-settings-login-card .aa-button-primary:hover,
+.dark-theme .aa-settings-login-card .aa-button-primary:hover {
+  background: rgba(255, 255, 255, 0.92);
+  color: #111;
 }
 
 .aa-checkbox {

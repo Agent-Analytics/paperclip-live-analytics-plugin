@@ -3,7 +3,7 @@
   "name": "Agent Analytics Live",
   "displayName": "Agent Analytics Live",
   "version": "0.1.0",
-  "categories": ["connector", "ui"],
+  "categories": ["connector", "ui", "Analytics"],
   "entrypoints": {
     "worker": "./src/worker/index.js",
     "ui": "./dist"
