@@ -4,7 +4,7 @@ Thin live-monitor plugin for Paperclip companies that want Agent Analytics signa
 
 Setup guide:
 
-`https://docs.agentanalytics.sh/guides/paperclip/`
+[Install and set up Agent Analytics for Paperclip](https://docs.agentanalytics.sh/guides/paperclip/)
 
 ## Screenshot
 
@@ -17,7 +17,7 @@ Setup guide:
 
 Create or access your Agent Analytics account at:
 
-`https://agentanalytics.sh`
+[agentanalytics.sh](https://agentanalytics.sh)
 
 ## Install
 
