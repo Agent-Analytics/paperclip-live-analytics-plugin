@@ -1,6 +1,6 @@
 {
   "name": "@agent-analytics/paperclip-live-analytics-plugin",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Thin Paperclip plugin that exposes live Agent Analytics signals inside a company workspace.",
   "license": "MIT",
   "type": "module",
