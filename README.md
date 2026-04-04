@@ -6,7 +6,7 @@ Setup guide:
 
 [Install and set up Agent Analytics for Paperclip](https://docs.agentanalytics.sh/guides/paperclip/)
 
-## Quick install in Paperclip UI
+## Install live map analytics plugin in Paperclip UI
 
 1. In Paperclip, open `Settings` -> `Plugins`.
 2. Click `Install Plugin`.
@@ -90,4 +90,4 @@ The package is configured for public scoped npm publishing.
 
 This directory is intended to become its own repository at:
 
-`https://github.com/Agent-Analytics/paperclip-live-analytics-plugin`
+[https://github.com/Agent-Analytics/paperclip-live-analytics-plugin](https://github.com/Agent-Analytics/paperclip-live-analytics-plugin)
