@@ -2,6 +2,14 @@
 
 Thin live-monitor plugin for Paperclip companies that want Agent Analytics signals where operators already work.
 
+Setup guide:
+
+`https://docs.agentanalytics.sh/guides/paperclip/`
+
+## Screenshot
+
+![Agent Analytics Live widget inside the Paperclip dashboard](./src/ui/assets/aa-in-dashboard.jpg)
+
 ## Requirements
 
 - An Agent Analytics account
