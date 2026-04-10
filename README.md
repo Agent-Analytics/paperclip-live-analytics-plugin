@@ -4,6 +4,8 @@ Live Agent Analytics inside a Paperclip company workspace.
 
 The plugin adds a live page, dashboard widget, sidebar entry, and settings page so operators can see current traffic without leaving Paperclip.
 
+The important setup rule is that this is a multi-company plugin: each Paperclip company keeps its own plugin configuration and chooses its own Agent Analytics project.
+
 Docs:
 
 - [Set up Agent Analytics for your Paperclip company](https://docs.agentanalytics.sh/guides/paperclip/)
@@ -22,7 +24,10 @@ Docs:
 4. Open the plugin `Configure` page.
 5. If the account is not set up yet, use the Paperclip setup task shown in the plugin help panel or the docs guide first.
 6. Log in with your existing Agent Analytics account in the browser.
-7. Open the company live page from the sidebar and choose the Agent Analytics project for that Paperclip company.
+7. In that company workspace, choose the Agent Analytics project from the plugin settings page.
+8. Open the company live page from the sidebar.
+
+If you run multiple Paperclip companies, repeat those steps in each company workspace. The selected project is per company, not a single global plugin setting for the whole Paperclip instance.
 
 ## Screenshot
 
@@ -42,7 +47,7 @@ First-time Agent Analytics setup for Paperclip should be driven by the Paperclip
 - `page`: company-level live map and evidence view
 - `dashboardWidget`: compact live status summary
 - `sidebar`: left-nav entry that opens the live page
-- `settingsPage`: existing-account browser login, Paperclip setup help, and advanced plugin settings
+- `settingsPage`: existing-account browser login, per-company project selection, Paperclip setup help, and advanced plugin settings
 - Worker-owned auth, `/live` polling, `/stream` fan-out, and company-scoped cache/state
 
 ## Install from the CLI
@@ -51,7 +56,7 @@ First-time Agent Analytics setup for Paperclip should be driven by the Paperclip
 npx paperclipai plugin install @agent-analytics/paperclip-live-analytics-plugin
 ```
 
-After install, finish connection from the plugin settings page, then choose the company’s Agent Analytics project on the live page.
+After install, finish connection and choose the Agent Analytics project from the plugin settings page for that company workspace.
 
 ## Local development
 
