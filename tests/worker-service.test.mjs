@@ -308,3 +308,80 @@ test('disconnectAuth clears selected project state', async () => {
   assert.equal(settings.selectedProjectId, '');
   assert.equal(settings.selectedProjectName, '');
 });
+
+test('runtime stops after live views stop refreshing the company heartbeat', async () => {
+  const { ctx } = createMockCtx();
+  await ctx.state.set(
+    { namespace: 'agent-analytics-live', scopeId: 'company_1', stateKey: 'config' },
+    {
+      ...createDefaultSettings(),
+      selectedProjectId: 'proj_1',
+      selectedProjectName: 'agentanalytics-sh',
+      selectedProjectLabel: 'agentanalytics-sh',
+      selectedProjectAllowedOrigins: ['*'],
+    }
+  );
+  await ctx.state.set(
+    { namespace: 'agent-analytics-live', scopeId: 'company_1', stateKey: 'auth' },
+    {
+      ...createDefaultAuthState(),
+      accessToken: 'access_1',
+      refreshToken: 'refresh_1',
+      status: 'connected',
+      accountSummary: { email: 'danny@example.com' },
+      tier: 'pro',
+    }
+  );
+
+  const service = new PaperclipLiveAnalyticsService(ctx, {
+    runtimeIdleMs: 20,
+    fetchImpl: async (url, options = {}) => {
+      const text = String(url);
+      if (text.includes('/live?project=agentanalytics-sh')) {
+        return new Response(JSON.stringify({
+          project: 'agentanalytics-sh',
+          window_seconds: 60,
+          timestamp: Date.now(),
+          active_visitors: 0,
+          active_sessions: 0,
+          events_per_minute: 0,
+          top_pages: [],
+          top_events: [],
+          countries: [],
+          recent_events: [],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (text.endsWith('/stream?project=agentanalytics-sh')) {
+        return new Response(new ReadableStream({
+          start(controller) {
+            options.signal?.addEventListener('abort', () => {
+              controller.error(new DOMException('Aborted', 'AbortError'));
+            }, { once: true });
+          },
+        }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+      }
+      if (text.endsWith('/projects/proj_1')) {
+        return new Response(JSON.stringify({
+          id: 'proj_1',
+          name: 'agentanalytics-sh',
+          usage_today: { event_count: 0, read_count: 0 },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (text.includes('/projects/proj_1/usage?days=7')) {
+        return new Response(JSON.stringify({
+          project_id: 'proj_1',
+          usage: [],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      throw new Error(`Unexpected URL ${text}`);
+    },
+  });
+
+  await service.loadLiveWidget({ companyId: 'company_1' });
+  assert.equal(service.runtimes.has('company_1'), true);
+
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  assert.equal(service.runtimes.has('company_1'), false);
+  await service.shutdown();
+});

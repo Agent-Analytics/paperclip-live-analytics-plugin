@@ -3,7 +3,7 @@ import { PLUGIN_PAGE_ROUTE } from '../shared/constants.js';
 const manifest = {
   id: 'agent-analytics.paperclip-live-analytics-plugin',
   apiVersion: 1,
-  version: '0.1.7',
+  version: '0.1.8',
   displayName: 'Agent Analytics Live',
   description: 'Paperclip plugin for viewing live Agent Analytics signals inside a company workspace.',
   author: '@agent-analytics',

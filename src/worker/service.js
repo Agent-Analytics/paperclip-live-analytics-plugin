@@ -30,6 +30,8 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const DEFAULT_RUNTIME_IDLE_MS = 30_000;
+
 function serializeAccount(account) {
   if (!account) return null;
   return {
@@ -64,9 +66,10 @@ function toPublicAuthState(auth) {
 }
 
 export class PaperclipLiveAnalyticsService {
-  constructor(ctx, { fetchImpl = globalThis.fetch } = {}) {
+  constructor(ctx, { fetchImpl = globalThis.fetch, runtimeIdleMs = DEFAULT_RUNTIME_IDLE_MS } = {}) {
     this.ctx = ctx;
     this.fetchImpl = fetchImpl;
+    this.runtimeIdleMs = runtimeIdleMs;
     this.runtimes = new Map();
   }
 
@@ -103,12 +106,14 @@ export class PaperclipLiveAnalyticsService {
 
   async loadLivePage({ companyId }) {
     const scopeCompanyId = this.requireCompanyId(companyId);
+    this.touchRuntime(scopeCompanyId);
     const liveState = await this.ensureLiveState(scopeCompanyId);
     return liveState;
   }
 
   async loadLiveWidget({ companyId }) {
     const scopeCompanyId = this.requireCompanyId(companyId);
+    this.touchRuntime(scopeCompanyId);
     const liveState = await this.ensureLiveState(scopeCompanyId);
     return deriveWidgetSummary(liveState);
   }
@@ -499,9 +504,26 @@ export class PaperclipLiveAnalyticsService {
         historicalSummary: null,
         lastHistoricalSyncAt: 0,
         lastState: null,
+        lastAccessedAt: 0,
+        idleTimeoutId: null,
       };
       this.runtimes.set(companyId, runtime);
     }
+    return runtime;
+  }
+
+  touchRuntime(companyId) {
+    const runtime = this.getRuntime(companyId);
+    runtime.lastAccessedAt = Date.now();
+    if (runtime.idleTimeoutId) {
+      clearTimeout(runtime.idleTimeoutId);
+    }
+    runtime.idleTimeoutId = setTimeout(() => {
+      const current = this.runtimes.get(companyId);
+      if (!current) return;
+      if (Date.now() - current.lastAccessedAt < this.runtimeIdleMs) return;
+      void this.stopRuntime(companyId).catch(() => {});
+    }, this.runtimeIdleMs);
     return runtime;
   }
 
@@ -550,9 +572,6 @@ export class PaperclipLiveAnalyticsService {
 
   validateSettings(settings, auth) {
     const warnings = [];
-    if (auth.accessToken && !settings.selectedProjectName) {
-      warnings.push('Select one Agent Analytics project to start the live monitor.');
-    }
     if (auth.accessToken && auth.tier && auth.tier !== 'pro') {
       warnings.push('Live events are a paid feature. The plugin will show the last 7 days until you upgrade.');
     }
@@ -786,6 +805,11 @@ export class PaperclipLiveAnalyticsService {
   async stopRuntime(companyId, { keepState = false } = {}) {
     const runtime = this.runtimes.get(companyId);
     if (!runtime) return;
+
+    if (runtime.idleTimeoutId) {
+      clearTimeout(runtime.idleTimeoutId);
+      runtime.idleTimeoutId = null;
+    }
 
     for (const intervalId of runtime.pollers.values()) {
       clearInterval(intervalId);
