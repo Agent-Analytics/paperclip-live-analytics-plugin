@@ -1,5 +1,7 @@
 import { startTransition, useEffect, useState } from 'react';
 import { ACTION_KEYS, DATA_KEYS, LIVE_STREAM_CHANNEL } from '../shared/constants.js';
+import { PAPERCLIP_SETUP_TASK_CONTENT, PAPERCLIP_SETUP_TASK_TITLE } from '../shared/paperclip-setup.js';
+import { copyTextWithToast } from './copy-text.js';
 import { demoLiveState } from './demo-data.js';
 import { useHostContext, usePluginAction, usePluginData, usePluginStream } from './paperclip-bridge.js';
 import { PageSurface } from './surfaces/PageSurface.jsx';
@@ -31,6 +33,10 @@ export function App() {
   const unsnoozeAsset = usePluginAction(ACTION_KEYS.assetUnsnooze);
 
   const [streamState, setStreamState] = useState(demoLiveState);
+
+  function copySetupText(text, successTitle) {
+    void copyTextWithToast({ text, successTitle, toast: null }).catch(() => {});
+  }
 
   useEffect(() => {
     if (surface === 'page' && livePage.data) setStreamState(livePage.data);
@@ -68,6 +74,8 @@ export function App() {
           onReconnect={() => authReconnect.run({ companyId })}
           onDisconnect={() => authDisconnect.run({ companyId })}
           onSaveSettings={(nextSettings) => settingsSave.run({ companyId, settings: nextSettings })}
+          onCopyTaskTitle={() => copySetupText(PAPERCLIP_SETUP_TASK_TITLE, 'Task title copied')}
+          onCopyTaskContent={() => copySetupText(PAPERCLIP_SETUP_TASK_CONTENT, 'Task content copied')}
         />
       </SurfaceFrame>
     );

@@ -49,7 +49,7 @@ test('service registers expected data and action handlers', async () => {
   const service = new PaperclipLiveAnalyticsService(ctx, { fetchImpl: async () => new Response(JSON.stringify({ projects: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } }) });
   await service.register();
   assert.equal(registrations.data.size, 3);
-  assert.equal(registrations.actions.size, 9);
+  assert.equal(registrations.actions.size, 10);
 });
 
 test('savePluginSettings stores the selected project in company state', async () => {
@@ -110,6 +110,36 @@ test('completeAuth is idempotent after the session is already connected', async 
   assert.equal(result.auth.connected, true);
   assert.equal(result.auth.accountSummary.email, 'danny@example.com');
   assert.equal(fetchCalls, 1);
+});
+
+test('acknowledgeAuthError clears the pending auth request without wiping settings', async () => {
+  const { ctx } = createMockCtx();
+  await ctx.state.set({ namespace: 'agent-analytics-live', scopeId: 'company_1', stateKey: 'config' }, {
+    ...createDefaultSettings(),
+    selectedProjectId: 'proj_1',
+    selectedProjectName: 'agentanalytics-sh',
+  });
+  await ctx.state.set(
+    { namespace: 'agent-analytics-live', scopeId: 'company_1', stateKey: 'auth' },
+    {
+      ...createDefaultAuthState(),
+      status: 'pending',
+      pendingAuthRequest: {
+        authRequestId: 'req_1',
+        authorizeUrl: 'https://api.agentanalytics.sh/agent-sessions/authorize/req_1',
+      },
+    }
+  );
+
+  const service = new PaperclipLiveAnalyticsService(ctx);
+  const result = await service.acknowledgeAuthError({
+    companyId: 'company_1',
+    message: 'Finish Agent Analytics account setup first.',
+  });
+
+  assert.equal(result.auth.pendingAuthRequest, null);
+  assert.equal(result.auth.lastError, 'Finish Agent Analytics account setup first.');
+  assert.equal(result.settings.selectedProjectName, 'agentanalytics-sh');
 });
 
 test('loadLivePage returns free tier fallback with historical summary', async () => {

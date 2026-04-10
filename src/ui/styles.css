@@ -936,6 +936,113 @@ select {
   line-height: 1.5;
 }
 
+.aa-settings-login-subtext {
+  margin: 0;
+  color: var(--aa-muted);
+  line-height: 1.6;
+}
+
+.aa-settings-login-error {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--aa-accent-warm) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aa-accent-warm) 28%, transparent);
+  color: var(--aa-ink);
+  line-height: 1.5;
+}
+
+.aa-settings-help-card {
+  display: grid;
+  gap: 18px;
+  width: min(720px, 100%);
+  padding: 24px;
+  border-radius: 24px;
+  background: var(--aa-panel-soft);
+  border: 1px solid var(--aa-panel-stroke-soft);
+  box-shadow: var(--aa-shadow);
+  text-align: left;
+}
+
+.aa-settings-help-card-copy {
+  display: grid;
+  gap: 10px;
+}
+
+.aa-settings-help-card h3 {
+  margin: 0;
+  font-family: var(--aa-serif);
+  font-size: clamp(1.7rem, 3vw, 2.2rem);
+  line-height: 1;
+}
+
+.aa-settings-help-card p {
+  margin: 0;
+  color: var(--aa-muted);
+  line-height: 1.6;
+}
+
+.aa-settings-setup-snippets {
+  display: grid;
+  gap: 14px;
+}
+
+.aa-settings-setup-snippet {
+  border-radius: 20px;
+  background: var(--aa-panel);
+  border: 1px solid var(--aa-panel-stroke-soft);
+  padding: 16px;
+}
+
+.aa-settings-setup-snippet-copy {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.aa-settings-setup-snippet-copy .aa-button {
+  flex: 0 0 136px;
+  min-width: 136px;
+  justify-content: center;
+  align-self: flex-start;
+  white-space: nowrap;
+}
+
+.aa-settings-setup-snippet-body {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.aa-settings-setup-snippet pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--aa-mono);
+  font-size: 0.92rem;
+  line-height: 1.6;
+  color: var(--aa-ink);
+}
+
+.aa-settings-help-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--aa-accent-cool);
+  font-weight: 600;
+}
+
+.aa-settings-help-link:hover {
+  text-decoration: underline;
+}
+
+.aa-settings-help-link-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
 .aa-settings-pending-auth .aa-settings-login-card {
   justify-items: center;
   text-align: center;
@@ -1009,6 +1116,18 @@ select {
 
   .aa-live-header-actions {
     justify-content: flex-start;
+  }
+}
+
+@media (max-width: 720px) {
+  .aa-settings-setup-snippet-copy {
+    flex-direction: column;
+  }
+
+  .aa-settings-setup-snippet-copy .aa-button {
+    flex-basis: auto;
+    min-width: 0;
+    width: 100%;
   }
 }
 

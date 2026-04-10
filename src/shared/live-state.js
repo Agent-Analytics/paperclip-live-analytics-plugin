@@ -431,7 +431,7 @@ export function buildCompanyLiveState({ settings, auth, assets, historicalSummar
     liveState.connection = {
       status: 'idle',
       label: 'Not connected',
-      detail: auth.lastError || 'Connect Agent Analytics from settings to start the live feed.',
+      detail: auth.lastError || 'Log in with an existing Agent Analytics account from settings to start the live feed.',
       reason: 'not_connected',
     };
   }

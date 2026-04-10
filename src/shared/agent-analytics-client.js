@@ -4,6 +4,7 @@ import {
   PLUGIN_DISPLAY_NAME,
   PLUGIN_ID,
 } from './constants.js';
+import { PAPERCLIP_SETUP_HELP_URL } from './paperclip-setup.js';
 
 function createJsonHeaders(auth) {
   const headers = {
@@ -124,6 +125,8 @@ export class AgentAnalyticsClient {
           platform: 'paperclip',
           plugin_id: PLUGIN_ID,
           company_id: companyId || null,
+          requires_existing_account: true,
+          setup_help_url: PAPERCLIP_SETUP_HELP_URL,
         },
       },
       { retryOnRefresh: false }

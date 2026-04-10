@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { AgentAnalyticsClient } from '../src/shared/agent-analytics-client.js';
+import { PAPERCLIP_SETUP_HELP_URL } from '../src/shared/paperclip-setup.js';
 
 test('request refreshes on 401 and retries once', async () => {
   const calls = [];
@@ -56,6 +57,8 @@ test('startPaperclipAuth sends detached paperclip metadata', async () => {
   assert.equal(body.mode, 'detached');
   assert.equal(body.client_type, 'paperclip');
   assert.equal(body.client_instance_id, 'company_1');
+  assert.equal(body.metadata.requires_existing_account, true);
+  assert.equal(body.metadata.setup_help_url, PAPERCLIP_SETUP_HELP_URL);
 });
 
 test('pollAgentSession posts auth request id and poll token', async () => {

@@ -77,6 +77,7 @@ export class PaperclipLiveAnalyticsService {
 
     await registerActionHandler(this.ctx, ACTION_KEYS.authStart, (input) => this.startAuth(input));
     await registerActionHandler(this.ctx, ACTION_KEYS.authComplete, (input) => this.completeAuth(input));
+    await registerActionHandler(this.ctx, ACTION_KEYS.authErrorAcknowledge, (input) => this.acknowledgeAuthError(input));
     await registerActionHandler(this.ctx, ACTION_KEYS.authReconnect, (input) => this.reconnectAuth(input));
     await registerActionHandler(this.ctx, ACTION_KEYS.authDisconnect, (input) => this.disconnectAuth(input));
     await registerActionHandler(this.ctx, ACTION_KEYS.settingsSave, (input) => this.savePluginSettings(input));
@@ -193,6 +194,18 @@ export class PaperclipLiveAnalyticsService {
 
     await saveAuthState(this.ctx, companyId, nextAuth);
     await this.ensureLiveState(companyId, { forceSync: true });
+    return this.loadSettingsData({ companyId });
+  }
+
+  async acknowledgeAuthError({ companyId, message }) {
+    const auth = await loadAuthState(this.ctx, companyId);
+    const nextAuth = {
+      ...auth,
+      status: auth.accessToken ? 'connected' : 'disconnected',
+      pendingAuthRequest: null,
+      lastError: message || auth.lastError || 'Agent Analytics login could not be completed.',
+    };
+    await saveAuthState(this.ctx, companyId, nextAuth);
     return this.loadSettingsData({ companyId });
   }
 

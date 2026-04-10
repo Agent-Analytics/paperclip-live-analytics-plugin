@@ -19,8 +19,9 @@ Setup guide:
 ```
 
 4. Open the plugin `Configure` page.
-5. Connect your Agent Analytics account in the browser.
-6. Select one Agent Analytics project for the current Paperclip company.
+5. If the account is not set up yet, use the Paperclip setup task shown in the plugin help panel or the docs guide first.
+6. Log in with your existing Agent Analytics account in the browser.
+7. Select one Agent Analytics project for the current Paperclip company.
 
 ## Screenshot
 
@@ -28,10 +29,12 @@ Setup guide:
 
 ## Requirements
 
-- An Agent Analytics account with live-read access
+- An existing Agent Analytics account with live-read access
 - A Paperclip instance with plugin support
 
-Create or access your Agent Analytics account at [agentanalytics.sh](https://agentanalytics.sh).
+First-time Agent Analytics setup for Paperclip should be driven by the Paperclip task flow in the docs guide, not by this login popup:
+
+[Set up Agent Analytics for your Paperclip company](https://docs.agentanalytics.sh/guides/paperclip/)
 
 ## What ships today
 
@@ -39,6 +42,7 @@ Create or access your Agent Analytics account at [agentanalytics.sh](https://age
 - `dashboardWidget`: compact live status summary
 - `sidebar`: left-nav entry that opens the live page
 - `settingsPage`: browser-based login, connection status, and project selection
+- `settingsPage`: existing-account browser login, Paperclip setup help, and project selection
 - Worker-owned auth, `/live` polling, `/stream` fan-out, and company-scoped cache/state
 
 ## Install from the CLI

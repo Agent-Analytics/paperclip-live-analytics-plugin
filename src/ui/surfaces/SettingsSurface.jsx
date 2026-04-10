@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { BILLING_UPGRADE_URL } from '../../shared/constants.js';
+import {
+  PAPERCLIP_SETUP_HELP_URL,
+  PAPERCLIP_SETUP_TASK_CONTENT,
+  PAPERCLIP_SETUP_TASK_TITLE,
+} from '../../shared/paperclip-setup.js';
 import { BrandMark } from '../components/BrandMark.jsx';
 import { trackPluginCta, trackPluginFeature } from '../analytics.js';
 
@@ -8,12 +13,45 @@ function normalizeOrigins(value) {
   return value || '*';
 }
 
+function SetupSnippet({ label, value, copyLabel, onCopy }) {
+  return (
+    <div className="aa-settings-setup-snippet">
+      <div className="aa-settings-setup-snippet-copy">
+        <div className="aa-settings-setup-snippet-body">
+          <span className="aa-label">{label}</span>
+          <pre>{value}</pre>
+        </div>
+        <button className="aa-button aa-button-light" onClick={onCopy}>
+          {copyLabel}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ExternalLinkIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="aa-settings-help-link-icon">
+      <path
+        d="M14 5h5v5M10 14 19 5M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function SettingsSurface({
   settingsData,
   onStartAuth,
   onReconnect,
   onDisconnect,
   onSaveSettings,
+  onCopyTaskTitle = () => {},
+  onCopyTaskContent = () => {},
 }) {
   const popupRef = useRef(null);
   const pendingPopupLaunchRef = useRef(false);
@@ -63,10 +101,10 @@ export function SettingsSurface({
   }, [settingsData.auth.pendingAuthRequest?.authorizeUrl]);
 
   useEffect(() => {
-    if (settingsData.auth.connected || settingsData.auth.pendingAuthRequest) {
+    if (settingsData.auth.connected || settingsData.auth.pendingAuthRequest || settingsData.auth.lastError) {
       setIsStartingAuth(false);
     }
-  }, [settingsData.auth.connected, settingsData.auth.pendingAuthRequest]);
+  }, [settingsData.auth.connected, settingsData.auth.pendingAuthRequest, settingsData.auth.lastError]);
 
   const isConnected = Boolean(settingsData.auth.connected);
   const isPending = Boolean(settingsData.auth.pendingAuthRequest);
@@ -196,10 +234,45 @@ export function SettingsSurface({
                 <span>Live customers and events on a map.</span>
               </div>
               <div className="aa-settings-login-card">
-                <p className="aa-settings-login-message">Connect your Agent Analytics account to start the live map in Paperclip.</p>
+                <p className="aa-settings-login-message">Log in with an existing Agent Analytics account to start the live map in Paperclip.</p>
+                <p className="aa-settings-login-subtext">If the account still needs to be created, have the agent do the setup first from the Paperclip task flow below.</p>
+                {settingsData.auth.lastError ? (
+                  <p className="aa-settings-login-error" role="alert">{settingsData.auth.lastError}</p>
+                ) : null}
                 <button className="aa-button aa-button-primary aa-button-hero" onClick={handleStartLogin}>
-                  Connect Agent Analytics
+                  Log in to existing account
                 </button>
+              </div>
+              <div className="aa-settings-help-card">
+                <div className="aa-settings-help-card-copy">
+                  <p className="aa-kicker">How to Set This Up</p>
+                  <h3>How to set this up in Paperclip</h3>
+                  <p>Use this task in Paperclip first. The agent should create the Agent Analytics account and complete setup before you use this login popup.</p>
+                </div>
+                <div className="aa-settings-setup-snippets">
+                  <SetupSnippet
+                    label="Task title"
+                    value={PAPERCLIP_SETUP_TASK_TITLE}
+                    copyLabel="Copy title"
+                    onCopy={onCopyTaskTitle}
+                  />
+                  <SetupSnippet
+                    label="Task content"
+                    value={PAPERCLIP_SETUP_TASK_CONTENT}
+                    copyLabel="Copy content"
+                    onCopy={onCopyTaskContent}
+                  />
+                </div>
+                <a
+                  className="aa-settings-help-link"
+                  href={PAPERCLIP_SETUP_HELP_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={() => trackPluginCta('open_paperclip_setup_help')}
+                >
+                  <span>Open the Paperclip setup guide</span>
+                  <ExternalLinkIcon />
+                </a>
               </div>
             </div>
           </>

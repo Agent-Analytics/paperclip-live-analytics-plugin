@@ -49,7 +49,7 @@ export function createEmptyCompanyLiveState() {
     connection: {
       status: 'idle',
       label: 'Not connected',
-      detail: 'Connect Agent Analytics from settings to start the live feed.',
+      detail: 'Log in with an existing Agent Analytics account from settings to start the live feed.',
       reason: 'not_connected',
     },
     metrics: {
