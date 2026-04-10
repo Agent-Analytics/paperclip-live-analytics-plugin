@@ -14,7 +14,8 @@ If the account still needs to be created or set up, do that first from the Paper
 4. Finish approval in the opened browser tab or popup
 5. The worker exchanges the returned session code
 6. The plugin validates `GET /projects`
-7. Select one Agent Analytics project for the Paperclip company
+7. Open the company live page
+8. Select one Agent Analytics project for the Paperclip company
 
 ## Worker-owned boundary
 
