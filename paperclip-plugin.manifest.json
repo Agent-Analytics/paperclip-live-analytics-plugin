@@ -2,7 +2,7 @@
   "id": "agent-analytics.paperclip-live-analytics-plugin",
   "name": "Agent Analytics Live",
   "displayName": "Agent Analytics Live",
-  "version": "0.1.9",
+  "version": "0.1.11",
   "categories": ["connector", "ui"],
   "entrypoints": {
     "worker": "./dist/worker.js",
