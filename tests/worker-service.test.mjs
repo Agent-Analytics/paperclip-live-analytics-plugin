@@ -138,7 +138,6 @@ test('interactive start stores PKCE verifier privately and exchanges with it', a
           ok: true,
           auth_request_id: 'req_1',
           authorize_url: 'https://api.agentanalytics.sh/agent-sessions/authorize/req_1',
-          approval_code: 'ABCD2345',
           poll_token: 'aap_1',
           expires_at: Date.now() + 600_000,
         }), { status: 201, headers: { 'Content-Type': 'application/json' } });

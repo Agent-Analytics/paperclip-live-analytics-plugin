@@ -74,7 +74,6 @@ function toPublicAuthState(auth) {
     ? {
         authRequestId: auth.pendingAuthRequest.authRequestId,
         authorizeUrl: auth.pendingAuthRequest.authorizeUrl,
-        approvalCode: auth.pendingAuthRequest.approvalCode,
         pollToken: auth.pendingAuthRequest.pollToken,
         expiresAt: auth.pendingAuthRequest.expiresAt,
       }
@@ -192,7 +191,6 @@ export class PaperclipLiveAnalyticsService {
       pendingAuthRequest: {
         authRequestId: started.auth_request_id,
         authorizeUrl: started.authorize_url,
-        approvalCode: started.approval_code,
         pollToken: started.poll_token,
         expiresAt: started.expires_at,
         codeVerifier: pkce?.codeVerifier || null,
