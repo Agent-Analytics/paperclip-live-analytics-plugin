@@ -2,7 +2,7 @@ export const PAPERCLIP_SETUP_HELP_URL = 'https://docs.agentanalytics.sh/guides/p
 
 export const PAPERCLIP_SETUP_TASK_TITLE = 'Hire an analyst to use AgentAnalytics';
 
-export const PAPERCLIP_SETUP_SKILL_INSTALL = 'npx skills add Agent-Analytics/agent-analytics-skill';
+export const PAPERCLIP_SETUP_SKILL_INSTALL = 'npx skills add agent-analytics/skills';
 
 export const PAPERCLIP_SETUP_TASK_CONTENT = `Hire or assign the analytics analyst for our company.
 
