@@ -79,7 +79,6 @@ export function usePluginAction(key) {
             pendingAuthRequest: {
               authRequestId: 'req_demo',
               authorizeUrl: 'https://api.agentanalytics.sh/agent-sessions/authorize/req_demo',
-              approvalCode: 'ABCD2345',
               pollToken: 'aap_demo',
               expiresAt: Date.now() + 600_000,
             },

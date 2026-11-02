@@ -3,11 +3,12 @@
 ## Host contract
 
 - Manifest entrypoints:
-  - `entrypoints.worker` → `./src/worker/index.js`
-  - `entrypoints.ui` → `./dist`
+  - published worker bundle → `./dist/worker.js`
+  - published UI bundle → `./dist/ui`
 - Declared surfaces:
   - `page`
   - `dashboardWidget`
+  - `sidebar`
   - `settingsPage`
 
 ## Worker/UI boundary
@@ -18,13 +19,13 @@
 
 ## State ownership
 
-- Company-scoped config: base URL, live window, poll cadence, enabled mappings
+- Company-scoped config: base URL, live window, poll cadence, selected project
 - Company-scoped auth: access token, refresh token, tier, pending detached login state
 - Company-scoped UI state: snoozed assets
+- Legacy `monitoredAssets` state is still normalized for compatibility, but the public v1 UI is single-project
 
 ## Stream delivery
 
 - Worker opens one company-scoped host stream channel
 - Worker emits normalized full-state payloads
 - UI replaces local live state wholesale on each event
-

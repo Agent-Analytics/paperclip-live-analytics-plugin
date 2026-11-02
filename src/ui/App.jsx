@@ -1,5 +1,7 @@
 import { startTransition, useEffect, useState } from 'react';
 import { ACTION_KEYS, DATA_KEYS, LIVE_STREAM_CHANNEL } from '../shared/constants.js';
+import { PAPERCLIP_SETUP_TASK_CONTENT, PAPERCLIP_SETUP_TASK_TITLE } from '../shared/paperclip-setup.js';
+import { copyTextWithToast } from './copy-text.js';
 import { demoLiveState } from './demo-data.js';
 import { useHostContext, usePluginAction, usePluginData, usePluginStream } from './paperclip-bridge.js';
 import { PageSurface } from './surfaces/PageSurface.jsx';
@@ -21,7 +23,7 @@ export function App() {
 
   const livePage = usePluginData(DATA_KEYS.livePageLoad, { companyId }, { enabled: surface === 'page' });
   const liveWidget = usePluginData(DATA_KEYS.liveWidgetLoad, { companyId }, { enabled: surface === 'dashboardWidget' });
-  const settings = usePluginData(DATA_KEYS.settingsLoad, { companyId }, { enabled: surface === 'settingsPage' });
+  const settings = usePluginData(DATA_KEYS.settingsLoad, { companyId }, { enabled: surface === 'settingsPage' || surface === 'page' });
 
   const authStart = usePluginAction(ACTION_KEYS.authStart);
   const authReconnect = usePluginAction(ACTION_KEYS.authReconnect);
@@ -31,6 +33,10 @@ export function App() {
   const unsnoozeAsset = usePluginAction(ACTION_KEYS.assetUnsnooze);
 
   const [streamState, setStreamState] = useState(demoLiveState);
+
+  function copySetupText(text, successTitle) {
+    void copyTextWithToast({ text, successTitle, toast: null }).catch(() => {});
+  }
 
   useEffect(() => {
     if (surface === 'page' && livePage.data) setStreamState(livePage.data);
@@ -46,9 +52,16 @@ export function App() {
   });
 
   if (surface === 'dashboardWidget') {
+    const widget = liveWidget.data || { connection: { status: 'idle', label: 'Idle' }, metrics: {}, warnings: [] };
+    const needsSetup = widget.connection?.reason === 'not_connected' || widget.connection?.reason === 'connection_error';
+    const needsProjectSelection = widget.connection?.reason === 'project_selection_required';
     return (
       <SurfaceFrame surface={surface}>
-        <WidgetSurface widget={liveWidget.data || liveWidget.data || { connection: { status: 'idle', label: 'Idle' }, metrics: {}, warnings: [] }} fullPageHref="?surface=page" />
+        <WidgetSurface
+          widget={widget}
+          primaryHref={needsSetup ? '?surface=settingsPage' : '?surface=page'}
+          primaryLabel={needsSetup ? 'Open plugin setup' : needsProjectSelection ? 'Choose project' : 'Open full live page'}
+        />
       </SurfaceFrame>
     );
   }
@@ -62,6 +75,8 @@ export function App() {
           onReconnect={() => authReconnect.run({ companyId })}
           onDisconnect={() => authDisconnect.run({ companyId })}
           onSaveSettings={(nextSettings) => settingsSave.run({ companyId, settings: nextSettings })}
+          onCopyTaskTitle={() => copySetupText(PAPERCLIP_SETUP_TASK_TITLE, 'Task title copied')}
+          onCopyTaskContent={() => copySetupText(PAPERCLIP_SETUP_TASK_CONTENT, 'Task content copied')}
         />
       </SurfaceFrame>
     );
@@ -71,6 +86,8 @@ export function App() {
     <SurfaceFrame surface={surface}>
       <PageSurface
         liveState={streamState}
+        settingsData={settings.data}
+        onSelectProject={(nextSettings) => settingsSave.run({ companyId, settings: nextSettings })}
         onSnooze={(assetKey) => snoozeAsset.run({ companyId, assetKey })}
         onUnsnooze={(assetKey) => unsnoozeAsset.run({ companyId, assetKey })}
       />

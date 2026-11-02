@@ -1,6 +1,22 @@
 import { BrandMark } from '../components/BrandMark.jsx';
+import { trackPluginCta } from '../analytics.js';
 
-export function WidgetSurface({ widget, fullPageHref = '?surface=page' }) {
+function formatShortDate(value) {
+  if (!value) return 'none';
+  return new Date(`${value}T00:00:00Z`).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+export function WidgetSurface({ widget, primaryHref = '?surface=page', primaryLabel = 'Open full live page' }) {
+  const summary = widget.historicalSummary;
+  const ctaEvent = primaryLabel === 'Open plugin setup'
+    ? 'open_plugin_setup_widget'
+    : primaryLabel === 'Choose project'
+      ? 'open_project_selection_widget'
+      : 'open_full_live_page_widget';
+
   return (
     <section className="aa-widget">
       <div className="aa-widget-header">
@@ -30,8 +46,27 @@ export function WidgetSurface({ widget, fullPageHref = '?surface=page' }) {
         </div>
       </div>
 
+      {summary ? (
+        <div className="aa-widget-summary">
+          <div className="aa-mini-row">
+            <span>7d events</span>
+            <strong>{summary.totals.events}</strong>
+          </div>
+          <div className="aa-mini-row">
+            <span>Last active</span>
+            <strong>{formatShortDate(summary.lastActiveDate)}</strong>
+          </div>
+        </div>
+      ) : null}
+
       <div className="aa-widget-footer">
-        <a className="aa-button aa-button-secondary" href={fullPageHref}>Open full live page</a>
+        <a
+          className="aa-button aa-button-secondary"
+          href={primaryHref}
+          onClick={() => trackPluginCta(ctaEvent)}
+        >
+          {primaryLabel}
+        </a>
       </div>
     </section>
   );

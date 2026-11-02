@@ -1,6 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useHostContext, usePluginAction, usePluginData, usePluginToast } from '@paperclipai/plugin-sdk/ui';
-import { ACTION_KEYS, DATA_KEYS, PLUGIN_PAGE_ROUTE } from '../shared/constants.js';
+import {
+  ACTION_KEYS,
+  AUTH_ERROR_CODE_ACCOUNT_SETUP_REQUIRED,
+  DATA_KEYS,
+  DEFAULT_BASE_URL,
+  PLUGIN_PAGE_ROUTE,
+} from '../shared/constants.js';
+import { PAPERCLIP_SETUP_TASK_CONTENT, PAPERCLIP_SETUP_TASK_TITLE } from '../shared/paperclip-setup.js';
+import { trackPluginCta, trackPluginFeature, trackPluginImpression } from '../ui/analytics.js';
+import { copyTextWithToast } from '../ui/copy-text.js';
 import { BrandMark } from '../ui/components/BrandMark.jsx';
 import { PageSurface } from '../ui/surfaces/PageSurface.jsx';
 import { SettingsSurface } from '../ui/surfaces/SettingsSurface.jsx';
@@ -55,6 +64,17 @@ function buildPluginSettingsHref() {
   return '/instance/settings/plugins';
 }
 
+function getAllowedAuthPopupOrigins(agentAnalyticsBaseUrl = DEFAULT_BASE_URL) {
+  const origins = new Set();
+  if (typeof window !== 'undefined') origins.add(window.location.origin);
+  try {
+    origins.add(new URL(agentAnalyticsBaseUrl).origin);
+  } catch {
+    origins.add(new URL(DEFAULT_BASE_URL).origin);
+  }
+  return origins;
+}
+
 function useAutoRefresh(refresh, intervalMs = 5000) {
   useEffect(() => {
     const intervalId = setInterval(() => {
@@ -68,9 +88,18 @@ function PageInner({ context }) {
   const companyId = useCompanyId(context);
   const toast = usePluginToast();
   const { data, loading, error, refresh } = usePluginData(DATA_KEYS.livePageLoad, { companyId });
+  const { data: settingsData, refresh: refreshSettings } = usePluginData(DATA_KEYS.settingsLoad, { companyId });
   const snoozeAsset = usePluginAction(ACTION_KEYS.assetSnooze);
   const unsnoozeAsset = usePluginAction(ACTION_KEYS.assetUnsnooze);
+  const settingsSave = usePluginAction(ACTION_KEYS.settingsSave);
   useAutoRefresh(refresh, 5000);
+  useAutoRefresh(refreshSettings, 5000);
+
+  useEffect(() => {
+    trackPluginImpression('live_page_viewed', {
+      company_id: companyId,
+    });
+  }, [companyId]);
 
   const content = useMemo(() => data, [data]);
 
@@ -80,6 +109,13 @@ function PageInner({ context }) {
 
   return React.createElement(PageSurface, {
     liveState: content,
+    settingsData,
+    onSelectProject: async (settings) => {
+      await settingsSave({ companyId, settings });
+      toast({ title: 'Project updated', tone: 'success' });
+      refreshSettings();
+      refresh();
+    },
     setupHref: buildPluginSettingsHref(),
     onSnooze: async (assetKey) => {
       await snoozeAsset({ companyId, assetKey });
@@ -100,13 +136,22 @@ function WidgetInner({ context }) {
   useAutoRefresh(refresh, 5000);
   const content = data;
 
+  useEffect(() => {
+    trackPluginImpression('dashboard_widget_viewed', {
+      company_id: companyId,
+    });
+  }, [companyId]);
+
   if (loading && !content) return React.createElement('div', { className: 'aa-widget' }, 'Loading…');
   if (error && !content) return React.createElement('div', { className: 'aa-widget' }, `Widget failed: ${error.message}`);
   if (!content) return React.createElement('div', { className: 'aa-widget' }, 'No live summary yet.');
+  const needsSetup = content.connection?.reason === 'not_connected' || content.connection?.reason === 'connection_error';
+  const needsProjectSelection = content.connection?.reason === 'project_selection_required';
 
   return React.createElement(WidgetSurface, {
     widget: content,
-    fullPageHref: buildPluginPageHref(context),
+    primaryHref: needsSetup ? buildPluginSettingsHref() : buildPluginPageHref(context),
+    primaryLabel: needsSetup ? 'Open plugin setup' : needsProjectSelection ? 'Choose project' : 'Open full live page',
   });
 }
 
@@ -125,6 +170,7 @@ function SidebarInner({ context }) {
       href,
       'aria-current': isActive ? 'page' : undefined,
       className: `aa-sidebar-link${isActive ? ' aa-sidebar-link-active' : ''}`,
+      onClick: () => trackPluginCta('sidebar_open_live_page'),
     },
     React.createElement(
       'span',
@@ -147,6 +193,7 @@ function SettingsInner({ context }) {
   const { data, loading, error, refresh } = usePluginData(DATA_KEYS.settingsLoad, { companyId });
   const authStart = usePluginAction(ACTION_KEYS.authStart);
   const authComplete = usePluginAction(ACTION_KEYS.authComplete);
+  const authErrorAcknowledge = usePluginAction(ACTION_KEYS.authErrorAcknowledge);
   const authReconnect = usePluginAction(ACTION_KEYS.authReconnect);
   const authDisconnect = usePluginAction(ACTION_KEYS.authDisconnect);
   const settingsSave = usePluginAction(ACTION_KEYS.settingsSave);
@@ -155,9 +202,25 @@ function SettingsInner({ context }) {
   const [callbackState, setCallbackState] = useState(null);
 
   useEffect(() => {
+    trackPluginImpression('settings_page_viewed', {
+      company_id: companyId,
+    });
+  }, [companyId]);
+
+  function copySetupText(text, successTitle) {
+    void copyTextWithToast({
+      text,
+      successTitle,
+      navigatorImpl: globalThis.navigator,
+      toast,
+    }).catch(() => {});
+  }
+
+  useEffect(() => {
     if (typeof window === 'undefined') return undefined;
+    const allowedOrigins = getAllowedAuthPopupOrigins(data?.settings?.agentAnalyticsBaseUrl || DEFAULT_BASE_URL);
     const handler = (event) => {
-      if (event?.origin !== window.location.origin) return;
+      if (!allowedOrigins.has(event?.origin)) return;
 
       if (event?.data?.type === 'agent-analytics-auth-callback') {
         if (!event.data.requestId || !event.data.exchangeCode || authCompletionRef.current) return;
@@ -170,6 +233,7 @@ function SettingsInner({ context }) {
               authRequestId: event.data.requestId,
               exchangeCode: event.data.exchangeCode,
             });
+            trackPluginFeature('login_completed', { company_id: companyId });
             toast({ title: 'Agent Analytics connected', tone: 'success' });
             refresh();
           } catch (completionError) {
@@ -185,14 +249,43 @@ function SettingsInner({ context }) {
         return;
       }
 
+      if (event?.data?.type === 'agent-analytics-auth-error') {
+        const message = event.data.message || 'Finish Agent Analytics account setup in Paperclip first, then try this login again.';
+        void (async () => {
+          try {
+            await authErrorAcknowledge({
+              companyId,
+              code: event.data.code,
+              message,
+            });
+            toast({
+              title: event.data.code === AUTH_ERROR_CODE_ACCOUNT_SETUP_REQUIRED
+                ? 'Finish account setup first'
+                : 'Agent Analytics login failed',
+              body: message,
+              tone: 'error',
+            });
+            refresh();
+          } catch (acknowledgeError) {
+            toast({
+              title: 'Agent Analytics login failed',
+              body: acknowledgeError.message || String(acknowledgeError),
+              tone: 'error',
+            });
+          }
+        })();
+        return;
+      }
+
       if (event?.data?.type === 'agent-analytics-auth-complete') {
+        trackPluginFeature('login_completed', { company_id: companyId });
         toast({ title: 'Agent Analytics connected', tone: 'success' });
         refresh();
       }
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, [authComplete, companyId, refresh, toast]);
+  }, [authComplete, authErrorAcknowledge, companyId, data?.settings?.agentAnalyticsBaseUrl, refresh, toast]);
 
   useEffect(() => {
     if (typeof window === 'undefined' || completedCallbackRef.current) return;
@@ -219,6 +312,7 @@ function SettingsInner({ context }) {
           setCallbackState('connected');
         } else {
           await authComplete({ companyId, authRequestId: requestId, exchangeCode });
+          trackPluginFeature('login_completed', { company_id: companyId });
           setCallbackState('connected');
         }
         url.searchParams.delete('request_id');
@@ -264,6 +358,7 @@ function SettingsInner({ context }) {
     },
     onDisconnect: async () => {
       await authDisconnect({ companyId });
+      trackPluginFeature('disconnect_completed', { company_id: companyId });
       refresh();
     },
     onSaveSettings: async (settings) => {
@@ -271,6 +366,8 @@ function SettingsInner({ context }) {
       toast({ title: 'Settings saved', tone: 'success' });
       refresh();
     },
+    onCopyTaskTitle: () => copySetupText(PAPERCLIP_SETUP_TASK_TITLE, 'Task title copied'),
+    onCopyTaskContent: () => copySetupText(PAPERCLIP_SETUP_TASK_CONTENT, 'Task content copied'),
   });
 }
 

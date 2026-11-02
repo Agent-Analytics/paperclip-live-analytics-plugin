@@ -1,22 +1,14 @@
 # Asset Mapping Guide
 
-Mappings are explicit and company-scoped.
+The current public plugin UI does not expose per-asset mapping controls.
 
-## Required fields
+## Current behavior
 
-- `assetKey`
-- `label`
-- `kind`
-- `agentAnalyticsProject`
+- Each Paperclip company selects one Agent Analytics project.
+- The live page and widget render that project's current live state.
+- Older worker/state code still understands mapping-shaped data for compatibility, but that is not part of the public setup flow.
 
-## Optional fields
+## Why this document still exists
 
-- `paperclipProjectId`
-- `primaryHostname`
-- `allowedOrigins`
-- `enabled`
-
-## Important v1 rule
-
-`/live` snapshots are project-scoped. If multiple mappings reuse the same Agent Analytics project, the plugin may mirror the same live totals across more than one asset card. The settings page warns when this happens.
-
+- The worker normalizes legacy `monitoredAssets` state if it already exists.
+- New installs should be documented and reasoned about as single-project configuration, not asset-by-asset mapping.

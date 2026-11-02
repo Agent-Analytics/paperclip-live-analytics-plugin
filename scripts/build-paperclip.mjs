@@ -1,3 +1,4 @@
+import { rm } from 'node:fs/promises';
 import { build } from 'esbuild';
 
 const shared = {
@@ -7,6 +8,8 @@ const shared = {
   target: 'es2022',
   logLevel: 'info',
 };
+
+await rm('dist', { recursive: true, force: true });
 
 await build({
   ...shared,

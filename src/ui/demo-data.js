@@ -1,4 +1,5 @@
 import {
+  BILLING_UPGRADE_URL,
   DEFAULT_BASE_URL,
   DEFAULT_LIVE_WINDOW_SECONDS,
   DEFAULT_POLL_INTERVAL_SECONDS,
@@ -20,8 +21,9 @@ export const demoLiveState = {
   },
   connection: {
     status: 'live',
-    label: 'Connected',
+    label: 'Live now',
     detail: 'Showing live state for agentanalytics-sh.',
+    reason: 'live_active',
   },
   metrics: {
     activeVisitors: 12,
@@ -127,6 +129,23 @@ export const demoLiveState = {
       errors: [],
     },
   ],
+  historicalSummary: {
+    projectId: 'aa_marketing',
+    projectName: 'agentanalytics-sh',
+    projectLabel: 'agentanalytics-sh',
+    allowedOrigins: ['*'],
+    usageToday: { events: 42, reads: 3 },
+    totals: { events: 186, reads: 12 },
+    activeDays: 5,
+    lastActiveDate: new Date(now - 86_400_000).toISOString().slice(0, 10),
+    windowDays: 7,
+    sparkline: Array.from({ length: 7 }, (_, index) => ({
+      date: new Date(now - (6 - index) * 86_400_000).toISOString().slice(0, 10),
+      events: [8, 0, 24, 31, 46, 35, 42][index],
+      reads: 0,
+    })),
+    hasActivity: true,
+  },
   snoozedAssets: [],
   warnings: [],
 };
@@ -161,7 +180,9 @@ export const demoSettingsData = {
     { id: 'aa_app', name: 'app-agentanalytics-sh', allowed_origins: '*' },
   ],
   validation: {
-    warnings: [],
+    warnings: [
+      `Live events are a paid feature. Upgrade at ${BILLING_UPGRADE_URL} if this account is on the free tier.`,
+    ],
     errors: [],
   },
   projectListError: null,

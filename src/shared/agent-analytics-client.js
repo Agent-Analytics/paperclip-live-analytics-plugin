@@ -4,6 +4,7 @@ import {
   PLUGIN_DISPLAY_NAME,
   PLUGIN_ID,
 } from './constants.js';
+import { PAPERCLIP_SETUP_HELP_URL } from './paperclip-setup.js';
 
 function createJsonHeaders(auth) {
   const headers = {
@@ -19,6 +20,14 @@ function buildQuery(params) {
     .filter(([, value]) => value !== null && value !== undefined && value !== '')
     .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
     .join('&');
+}
+
+function createApiError(data, response, fallbackMessage) {
+  const error = new Error(data.message || data.error || fallbackMessage || `HTTP ${response.status}`);
+  error.status = response.status;
+  error.code = data.error || null;
+  error.payload = data;
+  return error;
 }
 
 function parseSseEvent(rawEvent) {
@@ -94,13 +103,13 @@ export class AgentAnalyticsClient {
     }
 
     if (!response.ok) {
-      throw new Error(data.message || data.error || `HTTP ${response.status}`);
+      throw createApiError(data, response);
     }
 
     return data;
   }
 
-  async startPaperclipAuth({ companyId, label, mode = 'detached', callbackUrl = null } = {}) {
+  async startPaperclipAuth({ companyId, label, mode = 'detached', callbackUrl = null, codeChallenge = null } = {}) {
     return this.request(
       'POST',
       '/agent-sessions/start',
@@ -112,23 +121,27 @@ export class AgentAnalyticsClient {
         callback_url: callbackUrl,
         label: label || `Paperclip Company ${companyId || ''}`.trim(),
         scopes: AGENT_SESSION_SCOPES,
+        ...(codeChallenge ? { code_challenge: codeChallenge } : {}),
         metadata: {
           platform: 'paperclip',
           plugin_id: PLUGIN_ID,
           company_id: companyId || null,
+          requires_existing_account: true,
+          setup_help_url: PAPERCLIP_SETUP_HELP_URL,
         },
       },
       { retryOnRefresh: false }
     );
   }
 
-  async exchangeAgentSession(authRequestId, exchangeCode) {
+  async exchangeAgentSession(authRequestId, exchangeCode, codeVerifier = null) {
     return this.request(
       'POST',
       '/agent-sessions/exchange',
       {
         auth_request_id: authRequestId,
         exchange_code: exchangeCode,
+        ...(codeVerifier ? { code_verifier: codeVerifier } : {}),
       },
       { retryOnRefresh: false }
     );
@@ -177,6 +190,15 @@ export class AgentAnalyticsClient {
     return this.request('GET', `/live?${query}`);
   }
 
+  async getProject(projectId) {
+    return this.request('GET', `/projects/${encodeURIComponent(projectId)}`);
+  }
+
+  async getProjectUsage(projectId, { days } = {}) {
+    const query = buildQuery({ days });
+    return this.request('GET', `/projects/${encodeURIComponent(projectId)}/usage${query ? `?${query}` : ''}`);
+  }
+
   async subscribeToStream({ project, filter, signal, onConnected, onTrack, onComment }) {
     const query = buildQuery({
       project,
@@ -191,7 +213,13 @@ export class AgentAnalyticsClient {
 
     if (!response.ok || !response.body) {
       const payload = await response.text().catch(() => '');
-      throw new Error(payload || `Stream failed with HTTP ${response.status}`);
+      let parsed = {};
+      try {
+        parsed = payload ? JSON.parse(payload) : {};
+      } catch {
+        parsed = payload ? { message: payload } : {};
+      }
+      throw createApiError(parsed, response, `Stream failed with HTTP ${response.status}`);
     }
 
     const reader = response.body.getReader();

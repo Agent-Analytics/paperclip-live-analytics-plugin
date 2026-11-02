@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { AgentAnalyticsClient } from '../src/shared/agent-analytics-client.js';
+import { PAPERCLIP_SETUP_HELP_URL } from '../src/shared/paperclip-setup.js';
 
 test('request refreshes on 401 and retries once', async () => {
   const calls = [];
@@ -56,6 +57,55 @@ test('startPaperclipAuth sends detached paperclip metadata', async () => {
   assert.equal(body.mode, 'detached');
   assert.equal(body.client_type, 'paperclip');
   assert.equal(body.client_instance_id, 'company_1');
+  assert.equal(body.metadata.requires_existing_account, true);
+  assert.equal(body.metadata.setup_help_url, PAPERCLIP_SETUP_HELP_URL);
+});
+
+test('startPaperclipAuth sends PKCE challenge for interactive callbacks', async () => {
+  let body;
+  const client = new AgentAnalyticsClient({
+    fetchImpl: async (_url, options) => {
+      body = JSON.parse(options.body);
+      return new Response(JSON.stringify({
+        ok: true,
+        auth_request_id: 'req_1',
+        authorize_url: 'https://api.agentanalytics.sh/agent-sessions/authorize/req_1',
+      }), { status: 201, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  await client.startPaperclipAuth({
+    companyId: 'company_1',
+    mode: 'interactive',
+    callbackUrl: 'https://paperclip.example.com/agent-analytics-live?aa_auth_callback=1',
+    codeChallenge: 'challenge-1',
+  });
+
+  assert.equal(body.mode, 'interactive');
+  assert.equal(body.callback_url, 'https://paperclip.example.com/agent-analytics-live?aa_auth_callback=1');
+  assert.equal(body.code_challenge, 'challenge-1');
+});
+
+test('exchangeAgentSession sends code verifier when provided', async () => {
+  let body;
+  const client = new AgentAnalyticsClient({
+    fetchImpl: async (_url, options) => {
+      body = JSON.parse(options.body);
+      return new Response(JSON.stringify({
+        ok: true,
+        agent_session: { access_token: 'aas_1', refresh_token: 'aar_1' },
+        account: { email: 'user@example.com' },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    },
+  });
+
+  await client.exchangeAgentSession('req_1', 'aae_1', 'verifier-1');
+
+  assert.deepEqual(body, {
+    auth_request_id: 'req_1',
+    exchange_code: 'aae_1',
+    code_verifier: 'verifier-1',
+  });
 });
 
 test('pollAgentSession posts auth request id and poll token', async () => {

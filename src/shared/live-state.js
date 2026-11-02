@@ -3,6 +3,7 @@ import {
   DEFAULT_POLL_INTERVAL_SECONDS,
   DEFAULT_SNOOZE_MINUTES,
   DEFAULT_LIVE_WINDOW_SECONDS,
+  HISTORICAL_SUMMARY_DAYS,
   MAX_ENABLED_ASSET_STREAMS,
   MAX_LIVE_WINDOW_SECONDS,
   MAX_POLL_INTERVAL_SECONDS,
@@ -279,7 +280,42 @@ export function validateEnabledMappings(mappings = []) {
   return { warnings, errors };
 }
 
-export function buildCompanyLiveState({ settings, auth, assets, snoozes = {}, now = Date.now() }) {
+export function buildHistoricalSummary({
+  project = null,
+  usage = [],
+  settings = {},
+} = {}) {
+  const sparkline = (Array.isArray(usage) ? usage : []).map((row) => ({
+    date: String(row.date || ''),
+    events: Number(row.event_count || row.events || 0),
+    reads: Number(row.read_count || row.reads || 0),
+  }));
+  const totalEvents = sparkline.reduce((sum, row) => sum + row.events, 0);
+  const totalReads = sparkline.reduce((sum, row) => sum + row.reads, 0);
+  const lastActiveRow = sparkline.find((row) => row.events > 0 || row.reads > 0) || null;
+
+  return {
+    projectId: String(project?.id || settings.selectedProjectId || '').trim(),
+    projectName: String(project?.name || settings.selectedProjectName || '').trim(),
+    projectLabel: String(project?.name || settings.selectedProjectLabel || settings.selectedProjectName || 'Selected project').trim(),
+    allowedOrigins: Array.isArray(settings.selectedProjectAllowedOrigins) ? settings.selectedProjectAllowedOrigins : [],
+    usageToday: {
+      events: Number(project?.usage_today?.event_count || 0),
+      reads: Number(project?.usage_today?.read_count || 0),
+    },
+    totals: {
+      events: totalEvents,
+      reads: totalReads,
+    },
+    activeDays: sparkline.filter((row) => row.events > 0 || row.reads > 0).length,
+    lastActiveDate: lastActiveRow?.date || null,
+    windowDays: HISTORICAL_SUMMARY_DAYS,
+    sparkline,
+    hasActivity: totalEvents > 0 || totalReads > 0,
+  };
+}
+
+export function buildCompanyLiveState({ settings, auth, assets, historicalSummary = null, snoozes = {}, now = Date.now() }) {
   const liveState = createEmptyCompanyLiveState();
   const visibleAssets = [];
   const topPagesMap = new Map();
@@ -324,7 +360,10 @@ export function buildCompanyLiveState({ settings, auth, assets, snoozes = {}, no
   const configuredProjectCount = settings.selectedProjectName ? 1 : settings.monitoredAssets?.length || 0;
   const warnings = [];
   if (auth.status === 'connected' && !settings.selectedProjectName) {
-    warnings.push('Select one Agent Analytics project in settings to start the live monitor.');
+    warnings.push('Select one Agent Analytics project on the live page to start the live monitor.');
+  }
+  if (auth.status === 'connected' && auth.tier && auth.tier !== 'pro') {
+    warnings.push('Live events are a paid feature. The plugin will show the last 7 days until the account upgrades.');
   }
   const countries = sortCountries(Array.from(countryMap.values())).slice(0, 12);
   const sortedAssets = [...visibleAssets].sort((left, right) => {
@@ -338,15 +377,64 @@ export function buildCompanyLiveState({ settings, auth, assets, snoozes = {}, no
   liveState.authStatus = auth.status;
   liveState.tier = auth.tier;
   liveState.account = auth.accountSummary;
-  liveState.connection = {
-    status: auth.status === 'connected' ? 'live' : auth.status === 'error' ? 'error' : 'idle',
-    label: auth.status === 'connected' ? 'Connected' : auth.status === 'error' ? 'Attention needed' : 'Not connected',
-    detail: auth.status === 'connected'
-      ? settings.selectedProjectName
-        ? `Showing live state for ${settings.selectedProjectName}.`
-        : 'Connected. Select one Agent Analytics project in settings to start the live feed.'
-      : auth.lastError || 'Connect Agent Analytics from settings to start the live feed.',
-  };
+  liveState.historicalSummary = historicalSummary;
+
+  const hasSelectedProject = Boolean(settings.selectedProjectName);
+  const hasLiveActivity = Boolean(
+    activeVisitors ||
+    activeSessions ||
+    eventsPerMinute ||
+    recentEvents.length ||
+    topPagesMap.size ||
+    topEventsMap.size ||
+    countries.length
+  );
+
+  if (auth.tier && auth.tier !== 'pro' && hasSelectedProject) {
+    liveState.connection = {
+      status: 'idle',
+      label: 'Live requires paid account',
+      detail: `Showing the last ${historicalSummary?.windowDays || HISTORICAL_SUMMARY_DAYS} days for ${historicalSummary?.projectLabel || settings.selectedProjectName}. Upgrade to unlock live events.`,
+      reason: 'live_unavailable_free_tier',
+    };
+  } else if (auth.status === 'connected') {
+    if (!hasSelectedProject) {
+      liveState.connection = {
+        status: 'live',
+        label: 'Connected',
+        detail: 'Connected. Choose the Agent Analytics project for this company to load the live view.',
+        reason: 'project_selection_required',
+      };
+    } else if (hasLiveActivity) {
+      liveState.connection = {
+        status: 'live',
+        label: 'Live now',
+        detail: `Showing live state for ${settings.selectedProjectName}.`,
+        reason: 'live_active',
+      };
+    } else {
+      liveState.connection = {
+        status: 'connected',
+        label: 'No live visitors right now',
+        detail: `Showing the last ${historicalSummary?.windowDays || HISTORICAL_SUMMARY_DAYS} days for ${historicalSummary?.projectLabel || settings.selectedProjectName}.`,
+        reason: 'live_empty',
+      };
+    }
+  } else if (auth.status === 'error') {
+    liveState.connection = {
+      status: 'error',
+      label: 'Attention needed',
+      detail: auth.lastError || 'Reconnect Agent Analytics from settings to restore the live feed.',
+      reason: 'connection_error',
+    };
+  } else {
+    liveState.connection = {
+      status: 'idle',
+      label: 'Not connected',
+      detail: auth.lastError || 'Log in with an existing Agent Analytics account from settings to start the live feed.',
+      reason: 'not_connected',
+    };
+  }
   liveState.metrics = {
     activeVisitors,
     activeSessions,
@@ -384,6 +472,7 @@ export function deriveWidgetSummary(companyLiveState) {
     metrics: companyLiveState.metrics,
     topAsset: companyLiveState.assets[0] || null,
     hotCountry: companyLiveState.world.hotCountry,
+    historicalSummary: companyLiveState.historicalSummary,
     warnings: companyLiveState.warnings,
   };
 }

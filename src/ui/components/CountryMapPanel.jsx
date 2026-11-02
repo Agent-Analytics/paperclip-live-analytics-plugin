@@ -45,7 +45,7 @@ function FallbackCountrySummary({ countries, message }) {
   );
 }
 
-export function CountryMapPanel({ countries, hotCountryCode, updatedAt }) {
+export function CountryMapPanel({ countries, hotCountryCode, updatedAt, overlay = null }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const markersRef = useRef(null);
@@ -145,7 +145,12 @@ export function CountryMapPanel({ countries, hotCountryCode, updatedAt }) {
     <div className="aa-map-panel">
       <div className="aa-map-frame">
         <div ref={containerRef} className="aa-leaflet-map" />
-        {items.length === 0 ? (
+        {overlay ? (
+          <div className={`aa-map-empty-overlay${overlay.blocked ? ' aa-map-empty-overlay-blocked' : ''}`}>
+            <strong>{overlay.title}</strong>
+            <span>{overlay.description}</span>
+          </div>
+        ) : items.length === 0 ? (
           <div className="aa-map-empty-overlay">
             <strong>No country activity in the current live window yet.</strong>
             <span>The map stays live and will zoom into the first active country when traffic appears.</span>

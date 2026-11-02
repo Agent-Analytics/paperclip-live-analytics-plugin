@@ -5,6 +5,7 @@ import {
   applySnapshotToAssetState,
   applyTrackEventToAssetState,
   buildCompanyLiveState,
+  buildHistoricalSummary,
   createEmptyAssetState,
   mappingSignature,
   normalizeAssetMapping,
@@ -122,6 +123,96 @@ test('buildCompanyLiveState aggregates visible assets and snoozes hidden ones', 
   assert.equal(liveState.assets[0].assetKey, 'marketing');
 });
 
+test('buildHistoricalSummary composes 7 day fallback metrics', () => {
+  const summary = buildHistoricalSummary({
+    project: {
+      id: 'proj_1',
+      name: 'agentanalytics-sh',
+      usage_today: { event_count: 4, read_count: 1 },
+    },
+    usage: [
+      { date: '2026-04-02', event_count: 0, read_count: 0 },
+      { date: '2026-04-03', event_count: 2, read_count: 0 },
+      { date: '2026-04-04', event_count: 8, read_count: 1 },
+    ],
+    settings: {
+      selectedProjectId: 'proj_1',
+      selectedProjectName: 'agentanalytics-sh',
+      selectedProjectLabel: 'agentanalytics-sh',
+      selectedProjectAllowedOrigins: ['*'],
+    },
+  });
+
+  assert.equal(summary.projectId, 'proj_1');
+  assert.equal(summary.usageToday.events, 4);
+  assert.equal(summary.totals.events, 10);
+  assert.equal(summary.lastActiveDate, '2026-04-03');
+});
+
+test('buildCompanyLiveState marks free tier live as unavailable and preserves historical summary', () => {
+  const liveState = buildCompanyLiveState({
+    settings: {
+      pluginEnabled: true,
+      selectedProjectId: 'proj_1',
+      selectedProjectName: 'agentanalytics-sh',
+      selectedProjectLabel: 'agentanalytics-sh',
+      selectedProjectAllowedOrigins: ['*'],
+      monitoredAssets: [],
+    },
+    auth: {
+      status: 'connected',
+      tier: 'free',
+      accountSummary: { email: 'ops@example.com' },
+    },
+    assets: [],
+    historicalSummary: {
+      projectId: 'proj_1',
+      projectLabel: 'agentanalytics-sh',
+      windowDays: 7,
+      totals: { events: 12, reads: 0 },
+      usageToday: { events: 0, reads: 0 },
+      sparkline: [],
+      hasActivity: true,
+      lastActiveDate: '2026-04-04',
+    },
+  });
+
+  assert.equal(liveState.connection.reason, 'live_unavailable_free_tier');
+  assert.equal(liveState.historicalSummary.totals.events, 12);
+});
+
+test('buildCompanyLiveState marks pro tier with no live activity as live_empty', () => {
+  const liveState = buildCompanyLiveState({
+    settings: {
+      pluginEnabled: true,
+      selectedProjectId: 'proj_1',
+      selectedProjectName: 'agentanalytics-sh',
+      selectedProjectLabel: 'agentanalytics-sh',
+      selectedProjectAllowedOrigins: ['*'],
+      monitoredAssets: [],
+    },
+    auth: {
+      status: 'connected',
+      tier: 'pro',
+      accountSummary: { email: 'ops@example.com' },
+    },
+    assets: [],
+    historicalSummary: {
+      projectId: 'proj_1',
+      projectLabel: 'agentanalytics-sh',
+      windowDays: 7,
+      totals: { events: 3, reads: 0 },
+      usageToday: { events: 0, reads: 0 },
+      sparkline: [],
+      hasActivity: true,
+      lastActiveDate: '2026-04-04',
+    },
+  });
+
+  assert.equal(liveState.connection.reason, 'live_empty');
+  assert.equal(liveState.connection.status, 'connected');
+});
+
 test('validateEnabledMappings enforces account stream limit', () => {
   const mappings = Array.from({ length: 11 }, (_, index) =>
     normalizeAssetMapping({
@@ -135,4 +226,3 @@ test('validateEnabledMappings enforces account stream limit', () => {
   assert.equal(validation.errors.length, 1);
   assert.match(validation.errors[0], /at most 10 assets/i);
 });
-

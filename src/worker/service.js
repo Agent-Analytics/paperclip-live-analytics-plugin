@@ -3,10 +3,13 @@ import {
   DATA_KEYS,
   DEFAULT_BASE_URL,
   DEFAULT_SNOOZE_MINUTES,
+  HISTORICAL_SUMMARY_DAYS,
+  HISTORICAL_SUMMARY_REFRESH_MS,
   MAX_ENABLED_ASSET_STREAMS,
 } from '../shared/constants.js';
 import {
   buildCompanyLiveState,
+  buildHistoricalSummary,
   clampLiveWindowSeconds,
   clampPollIntervalSeconds,
   createEmptyAssetState,
@@ -27,6 +30,27 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const DEFAULT_RUNTIME_IDLE_MS = 30_000;
+
+function randomHex(byteLength) {
+  const bytes = new Uint8Array(byteLength);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function sha256Hex(value) {
+  const buffer = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(value)));
+  return Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function createPkcePair() {
+  const codeVerifier = randomHex(32);
+  return {
+    codeVerifier,
+    codeChallenge: await sha256Hex(codeVerifier),
+  };
+}
+
 function serializeAccount(account) {
   if (!account) return null;
   return {
@@ -41,7 +65,19 @@ function isStreamLimitErrorMessage(message) {
   return /STREAM_LIMIT|maximum 10 concurrent streams/i.test(String(message || ''));
 }
 
+function isProRequiredError(error) {
+  return error?.code === 'PRO_REQUIRED' || (error?.status === 403 && /paid plans|upgrade/i.test(String(error?.message || '')));
+}
+
 function toPublicAuthState(auth) {
+  const pendingAuthRequest = auth.pendingAuthRequest
+    ? {
+        authRequestId: auth.pendingAuthRequest.authRequestId,
+        authorizeUrl: auth.pendingAuthRequest.authorizeUrl,
+        pollToken: auth.pendingAuthRequest.pollToken,
+        expiresAt: auth.pendingAuthRequest.expiresAt,
+      }
+    : null;
   return {
     status: auth.status,
     mode: auth.mode,
@@ -49,7 +85,7 @@ function toPublicAuthState(auth) {
     accountSummary: auth.accountSummary,
     accessExpiresAt: auth.accessExpiresAt,
     refreshExpiresAt: auth.refreshExpiresAt,
-    pendingAuthRequest: auth.pendingAuthRequest,
+    pendingAuthRequest,
     lastValidatedAt: auth.lastValidatedAt,
     lastError: auth.lastError,
     connected: Boolean(auth.accessToken),
@@ -57,10 +93,19 @@ function toPublicAuthState(auth) {
 }
 
 export class PaperclipLiveAnalyticsService {
-  constructor(ctx, { fetchImpl = globalThis.fetch } = {}) {
+  constructor(ctx, { fetchImpl = globalThis.fetch, runtimeIdleMs = DEFAULT_RUNTIME_IDLE_MS } = {}) {
     this.ctx = ctx;
     this.fetchImpl = fetchImpl;
+    this.runtimeIdleMs = runtimeIdleMs;
     this.runtimes = new Map();
+  }
+
+  requireCompanyId(companyId) {
+    const normalized = String(companyId || '').trim();
+    if (!normalized) {
+      throw new Error('companyId is required for company-scoped plugin actions');
+    }
+    return normalized;
   }
 
   async register() {
@@ -70,6 +115,7 @@ export class PaperclipLiveAnalyticsService {
 
     await registerActionHandler(this.ctx, ACTION_KEYS.authStart, (input) => this.startAuth(input));
     await registerActionHandler(this.ctx, ACTION_KEYS.authComplete, (input) => this.completeAuth(input));
+    await registerActionHandler(this.ctx, ACTION_KEYS.authErrorAcknowledge, (input) => this.acknowledgeAuthError(input));
     await registerActionHandler(this.ctx, ACTION_KEYS.authReconnect, (input) => this.reconnectAuth(input));
     await registerActionHandler(this.ctx, ACTION_KEYS.authDisconnect, (input) => this.disconnectAuth(input));
     await registerActionHandler(this.ctx, ACTION_KEYS.settingsSave, (input) => this.savePluginSettings(input));
@@ -86,20 +132,25 @@ export class PaperclipLiveAnalyticsService {
   }
 
   async loadLivePage({ companyId }) {
-    const liveState = await this.ensureLiveState(companyId);
+    const scopeCompanyId = this.requireCompanyId(companyId);
+    this.touchRuntime(scopeCompanyId);
+    const liveState = await this.ensureLiveState(scopeCompanyId);
     return liveState;
   }
 
   async loadLiveWidget({ companyId }) {
-    const liveState = await this.ensureLiveState(companyId);
+    const scopeCompanyId = this.requireCompanyId(companyId);
+    this.touchRuntime(scopeCompanyId);
+    const liveState = await this.ensureLiveState(scopeCompanyId);
     return deriveWidgetSummary(liveState);
   }
 
   async loadSettingsData({ companyId }) {
-    const settings = this.normalizeSettings(await loadSettings(this.ctx, companyId));
-    const auth = await loadAuthState(this.ctx, companyId);
+    const scopeCompanyId = this.requireCompanyId(companyId);
+    const settings = this.normalizeSettings(await loadSettings(this.ctx, scopeCompanyId));
+    const auth = await loadAuthState(this.ctx, scopeCompanyId);
     const validation = this.validateSettings(settings, auth);
-    const projects = await this.listProjectsForCompany(companyId).catch((error) => ({
+    const projects = await this.listProjectsForCompany(scopeCompanyId).catch((error) => ({
       projects: [],
       tier: auth.tier,
       error: error.message,
@@ -114,14 +165,17 @@ export class PaperclipLiveAnalyticsService {
   }
 
   async startAuth({ companyId, label, callbackUrl = null }) {
-    const settings = this.normalizeSettings(await loadSettings(this.ctx, companyId));
-    const auth = await loadAuthState(this.ctx, companyId);
-    const client = this.createClient(companyId, settings, auth);
+    const scopeCompanyId = this.requireCompanyId(companyId);
+    const settings = this.normalizeSettings(await loadSettings(this.ctx, scopeCompanyId));
+    const auth = await loadAuthState(this.ctx, scopeCompanyId);
+    const client = this.createClient(scopeCompanyId, settings, auth);
+    const pkce = callbackUrl ? await createPkcePair() : null;
     const started = await client.startPaperclipAuth({
-      companyId,
+      companyId: scopeCompanyId,
       label,
       mode: callbackUrl ? 'interactive' : 'detached',
       callbackUrl,
+      codeChallenge: pkce?.codeChallenge,
     });
 
     const nextAuth = {
@@ -137,35 +191,37 @@ export class PaperclipLiveAnalyticsService {
       pendingAuthRequest: {
         authRequestId: started.auth_request_id,
         authorizeUrl: started.authorize_url,
-        approvalCode: started.approval_code,
         pollToken: started.poll_token,
         expiresAt: started.expires_at,
+        codeVerifier: pkce?.codeVerifier || null,
       },
     };
-    await saveAuthState(this.ctx, companyId, nextAuth);
-    return this.loadSettingsData({ companyId });
+    await saveAuthState(this.ctx, scopeCompanyId, nextAuth);
+    return this.loadSettingsData({ companyId: scopeCompanyId });
   }
 
   async completeAuth({ companyId, authRequestId, exchangeCode }) {
-    const settings = await loadSettings(this.ctx, companyId);
-    const auth = await loadAuthState(this.ctx, companyId);
+    const scopeCompanyId = this.requireCompanyId(companyId);
+    const settings = await loadSettings(this.ctx, scopeCompanyId);
+    const auth = await loadAuthState(this.ctx, scopeCompanyId);
     if (auth.accessToken && !auth.pendingAuthRequest) {
-      return this.loadSettingsData({ companyId });
+      return this.loadSettingsData({ companyId: scopeCompanyId });
     }
 
     const requestId = authRequestId || auth.pendingAuthRequest?.authRequestId;
+    const codeVerifier = auth.pendingAuthRequest?.codeVerifier || null;
     if (!requestId || !exchangeCode) {
       throw new Error('authRequestId and exchangeCode are required');
     }
 
-    const client = this.createClient(companyId, settings, auth);
+    const client = this.createClient(scopeCompanyId, settings, auth);
     let exchanged;
     try {
-      exchanged = await client.exchangeAgentSession(requestId, exchangeCode);
+      exchanged = await client.exchangeAgentSession(requestId, exchangeCode, codeVerifier);
     } catch (error) {
-      const latestAuth = await loadAuthState(this.ctx, companyId);
+      const latestAuth = await loadAuthState(this.ctx, scopeCompanyId);
       if (latestAuth.accessToken && !latestAuth.pendingAuthRequest) {
-        return this.loadSettingsData({ companyId });
+        return this.loadSettingsData({ companyId: scopeCompanyId });
       }
       throw error;
     }
@@ -184,22 +240,36 @@ export class PaperclipLiveAnalyticsService {
       lastError: null,
     };
 
-    await saveAuthState(this.ctx, companyId, nextAuth);
-    await this.ensureLiveState(companyId, { forceSync: true });
-    return this.loadSettingsData({ companyId });
+    await saveAuthState(this.ctx, scopeCompanyId, nextAuth);
+    await this.ensureLiveState(scopeCompanyId, { forceSync: true });
+    return this.loadSettingsData({ companyId: scopeCompanyId });
+  }
+
+  async acknowledgeAuthError({ companyId, message }) {
+    const scopeCompanyId = this.requireCompanyId(companyId);
+    const auth = await loadAuthState(this.ctx, scopeCompanyId);
+    const nextAuth = {
+      ...auth,
+      status: auth.accessToken ? 'connected' : 'disconnected',
+      pendingAuthRequest: null,
+      lastError: message || auth.lastError || 'Agent Analytics login could not be completed.',
+    };
+    await saveAuthState(this.ctx, scopeCompanyId, nextAuth);
+    return this.loadSettingsData({ companyId: scopeCompanyId });
   }
 
   async reconnectAuth({ companyId }) {
-    const settings = this.normalizeSettings(await loadSettings(this.ctx, companyId));
-    const auth = await loadAuthState(this.ctx, companyId);
+    const scopeCompanyId = this.requireCompanyId(companyId);
+    const settings = this.normalizeSettings(await loadSettings(this.ctx, scopeCompanyId));
+    const auth = await loadAuthState(this.ctx, scopeCompanyId);
     if (auth.pendingAuthRequest?.authRequestId && auth.pendingAuthRequest?.pollToken) {
-      return this.pollPendingAuth(companyId, settings, auth);
+      return this.pollPendingAuth(scopeCompanyId, settings, auth);
     }
     if (!auth.refreshToken) {
-      return this.startAuth({ companyId });
+      return this.startAuth({ companyId: scopeCompanyId });
     }
 
-    const client = this.createClient(companyId, settings, auth);
+    const client = this.createClient(scopeCompanyId, settings, auth);
     const refreshed = await client.refreshAgentSession();
     const nextAuth = {
       ...auth,
@@ -211,13 +281,15 @@ export class PaperclipLiveAnalyticsService {
       lastValidatedAt: Date.now(),
       lastError: null,
     };
-    await saveAuthState(this.ctx, companyId, nextAuth);
-    await this.ensureLiveState(companyId, { forceSync: true });
-    return this.loadSettingsData({ companyId });
+    await saveAuthState(this.ctx, scopeCompanyId, nextAuth);
+    await this.ensureLiveState(scopeCompanyId, { forceSync: true });
+    return this.loadSettingsData({ companyId: scopeCompanyId });
   }
 
   async disconnectAuth({ companyId }) {
-    const auth = await loadAuthState(this.ctx, companyId);
+    const scopeCompanyId = this.requireCompanyId(companyId);
+    const settings = this.normalizeSettings(await loadSettings(this.ctx, scopeCompanyId));
+    const auth = await loadAuthState(this.ctx, scopeCompanyId);
     const nextAuth = {
       ...auth,
       accessToken: null,
@@ -230,13 +302,23 @@ export class PaperclipLiveAnalyticsService {
       pendingAuthRequest: null,
       lastError: null,
     };
-    await saveAuthState(this.ctx, companyId, nextAuth);
-    await this.stopRuntime(companyId);
-    return this.loadSettingsData({ companyId });
+    const nextSettings = {
+      ...settings,
+      selectedProjectId: '',
+      selectedProjectName: '',
+      selectedProjectLabel: '',
+      selectedProjectAllowedOrigins: [],
+      monitoredAssets: [],
+    };
+    await saveSettings(this.ctx, scopeCompanyId, nextSettings);
+    await saveAuthState(this.ctx, scopeCompanyId, nextAuth);
+    await this.stopRuntime(scopeCompanyId);
+    return this.loadSettingsData({ companyId: scopeCompanyId });
   }
 
   async savePluginSettings({ companyId, settings: partialSettings = {} }) {
-    const currentSettings = this.normalizeSettings(await loadSettings(this.ctx, companyId));
+    const scopeCompanyId = this.requireCompanyId(companyId);
+    const currentSettings = this.normalizeSettings(await loadSettings(this.ctx, scopeCompanyId));
     const selectedProjectName = String(partialSettings.selectedProjectName ?? currentSettings.selectedProjectName ?? '').trim();
     const nextSettings = {
       ...currentSettings,
@@ -254,13 +336,14 @@ export class PaperclipLiveAnalyticsService {
       monitoredAssets: [],
       pluginEnabled: partialSettings.pluginEnabled ?? currentSettings.pluginEnabled,
     };
-    await saveSettings(this.ctx, companyId, nextSettings);
-    await this.ensureLiveState(companyId, { forceSync: true });
-    return this.loadSettingsData({ companyId });
+    await saveSettings(this.ctx, scopeCompanyId, nextSettings);
+    await this.ensureLiveState(scopeCompanyId, { forceSync: true });
+    return this.loadSettingsData({ companyId: scopeCompanyId });
   }
 
   async upsertMapping({ companyId, mapping }) {
-    const settings = await loadSettings(this.ctx, companyId);
+    const scopeCompanyId = this.requireCompanyId(companyId);
+    const settings = await loadSettings(this.ctx, scopeCompanyId);
     const normalized = normalizeAssetMapping(mapping);
     const monitoredAssets = [...settings.monitoredAssets];
     const existingIndex = monitoredAssets.findIndex((entry) => entry.assetKey === normalized.assetKey);
@@ -277,30 +360,32 @@ export class PaperclipLiveAnalyticsService {
       ...settings,
       monitoredAssets,
     };
-    await saveSettings(this.ctx, companyId, nextSettings);
-    await this.ensureLiveState(companyId, { forceSync: true });
-    return this.loadSettingsData({ companyId });
+    await saveSettings(this.ctx, scopeCompanyId, nextSettings);
+    await this.ensureLiveState(scopeCompanyId, { forceSync: true });
+    return this.loadSettingsData({ companyId: scopeCompanyId });
   }
 
   async removeMapping({ companyId, assetKey }) {
-    const settings = await loadSettings(this.ctx, companyId);
+    const scopeCompanyId = this.requireCompanyId(companyId);
+    const settings = await loadSettings(this.ctx, scopeCompanyId);
     const nextSettings = {
       ...settings,
       monitoredAssets: settings.monitoredAssets.filter((mapping) => mapping.assetKey !== assetKey),
     };
-    await saveSettings(this.ctx, companyId, nextSettings);
-    await this.ensureLiveState(companyId, { forceSync: true });
-    return this.loadSettingsData({ companyId });
+    await saveSettings(this.ctx, scopeCompanyId, nextSettings);
+    await this.ensureLiveState(scopeCompanyId, { forceSync: true });
+    return this.loadSettingsData({ companyId: scopeCompanyId });
   }
 
   async snoozeAsset({ companyId, assetKey, minutes = DEFAULT_SNOOZE_MINUTES }) {
-    const snoozes = await loadSnoozes(this.ctx, companyId);
+    const scopeCompanyId = this.requireCompanyId(companyId);
+    const snoozes = await loadSnoozes(this.ctx, scopeCompanyId);
     const nextSnoozes = {
       ...snoozes,
       [assetKey]: createSnoozeExpiry(minutes),
     };
-    await saveSnoozes(this.ctx, companyId, nextSnoozes);
-    const liveState = await this.ensureLiveState(companyId);
+    await saveSnoozes(this.ctx, scopeCompanyId, nextSnoozes);
+    const liveState = await this.ensureLiveState(scopeCompanyId);
     return {
       snoozes: nextSnoozes,
       liveState,
@@ -308,11 +393,12 @@ export class PaperclipLiveAnalyticsService {
   }
 
   async unsnoozeAsset({ companyId, assetKey }) {
-    const snoozes = await loadSnoozes(this.ctx, companyId);
+    const scopeCompanyId = this.requireCompanyId(companyId);
+    const snoozes = await loadSnoozes(this.ctx, scopeCompanyId);
     const nextSnoozes = { ...snoozes };
     delete nextSnoozes[assetKey];
-    await saveSnoozes(this.ctx, companyId, nextSnoozes);
-    const liveState = await this.ensureLiveState(companyId);
+    await saveSnoozes(this.ctx, scopeCompanyId, nextSnoozes);
+    const liveState = await this.ensureLiveState(scopeCompanyId);
     return {
       snoozes: nextSnoozes,
       liveState,
@@ -320,30 +406,34 @@ export class PaperclipLiveAnalyticsService {
   }
 
   async ensureLiveState(companyId, { forceSync = false } = {}) {
-    const settings = this.normalizeSettings(await loadSettings(this.ctx, companyId));
-    const auth = await loadAuthState(this.ctx, companyId);
-    const snoozes = await loadSnoozes(this.ctx, companyId);
+    const scopeCompanyId = this.requireCompanyId(companyId);
+    const settings = this.normalizeSettings(await loadSettings(this.ctx, scopeCompanyId));
+    const auth = await loadAuthState(this.ctx, scopeCompanyId);
+    const snoozes = await loadSnoozes(this.ctx, scopeCompanyId);
 
-    const runtime = this.getRuntime(companyId);
+    const runtime = this.getRuntime(scopeCompanyId);
     if (forceSync) {
-      await this.syncRuntime(companyId, settings, auth, runtime);
+      await this.syncRuntime(scopeCompanyId, settings, auth, runtime);
     } else if (!runtime.lastState) {
-      await this.syncRuntime(companyId, settings, auth, runtime);
+      await this.syncRuntime(scopeCompanyId, settings, auth, runtime);
     }
 
-    return this.composeLiveState(companyId, settings, auth, snoozes);
+    await this.syncHistoricalSummary(scopeCompanyId, settings, auth, runtime, { forceSync });
+
+    return this.composeLiveState(scopeCompanyId, settings, auth, snoozes);
   }
 
   async syncRuntime(companyId, settings, auth, runtime) {
     const selectedMapping = this.getSelectedProjectMapping(settings);
     const mappings = selectedMapping ? [selectedMapping] : [];
     const validation = validateEnabledMappings(mappings);
-    if (!settings.pluginEnabled || !auth.accessToken || !selectedMapping || validation.errors.length > 0) {
+    if (!settings.pluginEnabled || !auth.accessToken || !selectedMapping || validation.errors.length > 0 || auth.tier !== 'pro') {
       if (validation.errors.length > 0) {
         auth.status = 'error';
         auth.lastError = validation.errors.join(' ');
         await saveAuthState(this.ctx, companyId, auth);
       }
+      runtime.assetStates.clear();
       await this.stopRuntime(companyId, { keepState: true });
       return;
     }
@@ -441,10 +531,29 @@ export class PaperclipLiveAnalyticsService {
         pollers: new Map(),
         streams: new Map(),
         assetStates: new Map(),
+        historicalSummary: null,
+        lastHistoricalSyncAt: 0,
         lastState: null,
+        lastAccessedAt: 0,
+        idleTimeoutId: null,
       };
       this.runtimes.set(companyId, runtime);
     }
+    return runtime;
+  }
+
+  touchRuntime(companyId) {
+    const runtime = this.getRuntime(companyId);
+    runtime.lastAccessedAt = Date.now();
+    if (runtime.idleTimeoutId) {
+      clearTimeout(runtime.idleTimeoutId);
+    }
+    runtime.idleTimeoutId = setTimeout(() => {
+      const current = this.runtimes.get(companyId);
+      if (!current) return;
+      if (Date.now() - current.lastAccessedAt < this.runtimeIdleMs) return;
+      void this.stopRuntime(companyId).catch(() => {});
+    }, this.runtimeIdleMs);
     return runtime;
   }
 
@@ -493,8 +602,8 @@ export class PaperclipLiveAnalyticsService {
 
   validateSettings(settings, auth) {
     const warnings = [];
-    if (auth.accessToken && !settings.selectedProjectName) {
-      warnings.push('Select one Agent Analytics project to start the live monitor.');
+    if (auth.accessToken && auth.tier && auth.tier !== 'pro') {
+      warnings.push('Live events are a paid feature. The plugin will show the last 7 days until you upgrade.');
     }
     return { warnings, errors: [] };
   }
@@ -516,7 +625,7 @@ export class PaperclipLiveAnalyticsService {
         throw new Error('Approval completed without an exchange code.');
       }
 
-      const exchanged = await client.exchangeAgentSession(requestId, polled.exchange_code);
+      const exchanged = await client.exchangeAgentSession(requestId, polled.exchange_code, auth.pendingAuthRequest?.codeVerifier || null);
       const nextAuth = {
         mode: 'agent_session',
         accessToken: exchanged.agent_session.access_token,
@@ -629,7 +738,7 @@ export class PaperclipLiveAnalyticsService {
       lastUpdatedAt: Date.now(),
     });
 
-    if (!isStreamLimitErrorMessage(message)) {
+    if (!isStreamLimitErrorMessage(message) && !isProRequiredError(error)) {
       const auth = await loadAuthState(this.ctx, companyId);
       await saveAuthState(this.ctx, companyId, {
         ...auth,
@@ -659,6 +768,7 @@ export class PaperclipLiveAnalyticsService {
       settings,
       auth,
       assets: assetStates,
+      historicalSummary: runtime.historicalSummary,
       snoozes,
     });
     runtime.lastState = liveState;
@@ -666,18 +776,70 @@ export class PaperclipLiveAnalyticsService {
   }
 
   async listProjectsForCompany(companyId) {
-    const settings = this.normalizeSettings(await loadSettings(this.ctx, companyId));
-    const auth = await loadAuthState(this.ctx, companyId);
+    const scopeCompanyId = this.requireCompanyId(companyId);
+    const settings = this.normalizeSettings(await loadSettings(this.ctx, scopeCompanyId));
+    const auth = await loadAuthState(this.ctx, scopeCompanyId);
     if (!auth.accessToken) {
       return { projects: [], tier: auth.tier, error: null };
     }
-    const client = this.createClient(companyId, settings, auth);
+    const client = this.createClient(scopeCompanyId, settings, auth);
     return client.listProjects();
+  }
+
+  async syncHistoricalSummary(companyId, settings, auth, runtime, { forceSync = false } = {}) {
+    const now = Date.now();
+    const selectedProjectId = String(settings.selectedProjectId || '').trim();
+
+    if (!auth.accessToken || !selectedProjectId) {
+      runtime.historicalSummary = null;
+      runtime.lastHistoricalSyncAt = 0;
+      return;
+    }
+
+    if (!forceSync && runtime.historicalSummary && now - runtime.lastHistoricalSyncAt < HISTORICAL_SUMMARY_REFRESH_MS) {
+      return;
+    }
+
+    try {
+      const client = this.createClient(companyId, settings, auth);
+      const [project, usage] = await Promise.all([
+        client.getProject(selectedProjectId),
+        client.getProjectUsage(selectedProjectId, { days: HISTORICAL_SUMMARY_DAYS }),
+      ]);
+
+      runtime.historicalSummary = buildHistoricalSummary({
+        project,
+        usage: usage?.usage || [],
+        settings,
+      });
+      runtime.lastHistoricalSyncAt = now;
+    } catch (error) {
+      runtime.historicalSummary = runtime.historicalSummary || buildHistoricalSummary({
+        project: null,
+        usage: [],
+        settings,
+      });
+      runtime.lastHistoricalSyncAt = now;
+
+      if (!isProRequiredError(error)) {
+        const authState = await loadAuthState(this.ctx, companyId);
+        await saveAuthState(this.ctx, companyId, {
+          ...authState,
+          status: 'error',
+          lastError: error.message || String(error),
+        });
+      }
+    }
   }
 
   async stopRuntime(companyId, { keepState = false } = {}) {
     const runtime = this.runtimes.get(companyId);
     if (!runtime) return;
+
+    if (runtime.idleTimeoutId) {
+      clearTimeout(runtime.idleTimeoutId);
+      runtime.idleTimeoutId = null;
+    }
 
     for (const intervalId of runtime.pollers.values()) {
       clearInterval(intervalId);
@@ -691,6 +853,8 @@ export class PaperclipLiveAnalyticsService {
 
     if (!keepState) {
       runtime.assetStates.clear();
+      runtime.historicalSummary = null;
+      runtime.lastHistoricalSyncAt = 0;
       runtime.lastState = null;
       this.runtimes.delete(companyId);
     }
