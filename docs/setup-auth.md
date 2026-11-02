@@ -17,6 +17,14 @@ If the account still needs to be created or set up, do that first from the Paper
 7. Select one Agent Analytics project for the current Paperclip company from plugin settings
 8. Open the company live page
 
+## After login succeeds
+
+1. Confirm the plugin can read your Agent Analytics projects
+2. Select one Agent Analytics project for the current Paperclip company
+3. Open the live page or dashboard widget and confirm live data is flowing
+
+If the login succeeds but no projects appear, reconnect first and then verify the connected account has access to the projects you expect.
+
 ## Worker-owned boundary
 
 - Access token and refresh token are stored in worker-owned company state

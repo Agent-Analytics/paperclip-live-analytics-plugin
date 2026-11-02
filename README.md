@@ -1,8 +1,10 @@
 # Agent Analytics Live for Paperclip
 
-Live Agent Analytics inside a Paperclip company workspace.
+Agent Analytics Live is the Paperclip plugin for operators who want live web activity where they already run the company.
 
-The plugin adds a live page, dashboard widget, sidebar entry, and settings page so operators can see current traffic without leaving Paperclip.
+It brings a company-level live monitor, a dashboard widget, and a sidebar entry into Paperclip so teams can answer one question quickly:
+
+Which company asset is moving right now, and is that movement worth attention?
 
 The important setup rule is that this is a multi-company plugin: each Paperclip company keeps its own plugin configuration and chooses its own Agent Analytics project.
 
@@ -10,6 +12,12 @@ Docs:
 
 - [Set up Agent Analytics for your Paperclip company](https://docs.agentanalytics.sh/guides/paperclip/)
 - [Paperclip Live Plugin](https://docs.agentanalytics.sh/reference/paperclip-live-plugin/)
+- [Operator overview](./docs/operator-overview.md)
+- [Setup and auth](./docs/setup-auth.md)
+- [Asset mapping guide](./docs/asset-mapping.md)
+- [Live behavior](./docs/live-behavior.md)
+- [Limits and troubleshooting](./docs/limits-and-troubleshooting.md)
+- [Maintainer notes](./docs/MAINTAINER.md)
 
 ## Install in Paperclip
 
@@ -38,6 +46,8 @@ If you run multiple Paperclip companies, repeat those steps in each company work
 - An existing Agent Analytics account with live-read access
 - A Paperclip instance with plugin support
 
+`/stream` and `/live` are live routes, and `/live` is paid-only. The plugin is intentionally a live monitor, not a historical reporting surface.
+
 First-time Agent Analytics setup for Paperclip should be driven by the Paperclip task flow in the docs guide, not by this login popup:
 
 [Set up Agent Analytics for your Paperclip company](https://docs.agentanalytics.sh/guides/paperclip/)
@@ -62,6 +72,7 @@ After install, finish connection and choose the Agent Analytics project from the
 
 ```bash
 cd paperclip-live-analytics-plugin
+npm install
 npm test
 npm run build
 npm pack
@@ -69,6 +80,13 @@ npm pack
 
 - `npm test` exercises the worker/shared logic.
 - `npm run build` produces the Paperclip worker, manifest, and UI bundle.
+
+Helpful local commands:
+
+```bash
+npm run pack:local
+npm run reinstall:local
+```
 
 ## Publish
 
